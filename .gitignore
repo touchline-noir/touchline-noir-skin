@@ -1,0 +1,8 @@
+# Never commit signing keys or local build output.
+*.private.xml
+*.pem
+*.key
+*.pfx
+keys/
+release-*/
+test-*/

@@ -3,12 +3,13 @@
   터치라인 누아르 스킨 업데이트 도구 (Football Manager 27 · Windows · Steam)
 
   하는 일
-  1. GitHub 릴리스의 업데이트 정보(noir-update.json)와 서명을 받아, 이 파일 안의 공개 키로 확인합니다.
-     서명이 맞지 않으면 아무것도 받지 않고 멈춥니다.
+  1. GitHub 릴리스의 업데이트 정보(noir-update.json)와 서명 목록(noir-update.json.sigs)을 받아, 이 파일 안의
+     공개 키로 확인합니다. 서명이 맞지 않거나, 전에 받은 것보다 오래된 정보면 아무것도 받지 않고 멈춥니다.
   2. 게임 폴더 · 게임 빌드 · 설치된 테마를 확인하고, 바뀐 스킨 파일만 내려받아 새 버전 설치 패키지를
      이 컴퓨터(%LOCALAPPDATA%\TouchlineNoir\packages)에 다시 만듭니다. 받은 파일은 모두 SHA-256으로 확인합니다.
-  3. FM27이 꺼진 뒤, 그 패키지의 설치 과정(2-Install.cmd와 같은 검사 · 원본 백업 · 확인)을 관리자 권한으로
-     실행합니다. 게임 파일은 이 단계에서만, 스킨 설치 도구를 통해서만 바뀝니다.
+  3. FM27이 꺼진 뒤, 패키지 파일을 다시 확인하고 설치가 끝날 때까지 바꿀 수 없게 잡아 둔 채로, 그 패키지의
+     설치 과정(2-Install.cmd와 같은 검사 · 원본 백업 · 확인)을 관리자 권한으로 실행합니다.
+     게임 파일은 이 단계에서만, 스킨 설치 도구를 통해서만 바뀝니다.
   4. 새 버전 알림(선택): 켜 두면 로그인할 때와 3시간마다 업데이트 정보만 확인해, 새 버전이 있으면
      Windows 알림을 띄웁니다. FM이 실행 중일 때는 알리지 않습니다.
 
@@ -20,7 +21,7 @@
         -Notify On        새 버전 알림을 켭니다.  -Notify Off  알림을 끄고 등록한 항목을 모두 지웁니다.
         -Yes              묻지 않고 진행합니다 (관리자 권한 확인 창은 그대로 뜹니다).
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Theme,
     [string]$GamePath,
@@ -29,6 +30,7 @@ param(
     [switch]$Yes,
     [string]$Notify,
     [switch]$NotifyCheck,
+    [switch]$FromProtocol,
     [switch]$NoSelfUpdate,
     [string]$ManifestUrl,
     [string]$CacheRoot
@@ -38,18 +40,28 @@ Set-StrictMode -Version Latest
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
 
-$UpdaterVersion = 2
+$UpdaterVersion = 3
 $DefaultManifestUrl = 'https://github.com/touchline-noir/touchline-noir-skin/releases/latest/download/noir-update.json'
 $DefaultCacheRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'TouchlineNoir'
-$PublicKeyXml = '<RSAKeyValue><Modulus>3JmeuOogTBadgyGobMTHROideCa9DssUfDKTfSdhnyBk4JEL1+8P3uGltDvwVBNZJe2T5NuSFV3qo4QgZy8bOPMMees8d4dKO0Hh45yhNijGsGs2CGbgormGlv8AOe6E5DXHroSxTMYC4JG7K6A6CfHmHygf1pbx5e2rttv8g8UUeDTyTHFAmMjxECf3f6pIZJ4/NEDLJWcWXps+1k6n1BbQ3J2fuvnLlXbJMfOoc+3P95cBrx5cq/RM4IJyip/GwiAXvSpSm3cDu6zCFKOmtQ24bDRMnIMl1ZfVktTD9/OCBgkJ47CEbIzfre1lBEgm0B8mJ8eNCDUkBK9+rMP8M0AIWJtyYffnRYiXjwChxR4Tmp95Icgs+GwkLUf+i9uOe1IgZPWPEqOb0lBz+woeG1KEeuFxYBdL7uj7dJ4RDeHXDM9FnV/YBhi0k2gd3Zg0SRpy1LkTLKPA5uum7fa55/glPY28h0M10zlmO+Z214yO5BuZboKtI07eMbeibZZd</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
+# BEGIN TRUSTED KEYS (key id = first 16 hex digits of SHA-256 of the RSA modulus)
+$TrustedKeys = @{
+    'd1472c957cdab4de' = '<RSAKeyValue><Modulus>segRmsXUw9FuwOk2ZycrkNz+h3sLeNihlioENnbeIr70oRgUSYc2B9fueRKLqnlIaSd64LUvelyesCdmqZnCrSHQOmKYNsJ7uJjggaNTK7JZiOi4fduNmoc9xOTvAh4KoL2HdSQ+Qpkusg6wn8pOwSoVOc3Jl0eWj0ZXObJGfXg1XWsSWLSkkijpbGtx1xndn+TUXOxMo3VyHd3bXXVlhTiGKAZIGDDjjpgGr4VY8LRS1pRUdE9BbuUgZYNzVE5a9WWAkg1yZuOrrD3/CL3Wif+Nfo3eLZe1MZNEbXOGgIu2W8aXWBppNH0CTRDoj71cJqA2ACKoBoFFJALGYspNqlYf5hY5xgrd7jbw5OVa/OkZAVC6Dbuf4swtfbA8Nv2psx2LUsqYG2e6mUE+Lrs7Y4DkBx5UmbC9ROadAE8djWOdTRzOYNyIL+5HN6/9B2akmWbyO91C4czNDF2KHWLsS9AiVZe5T0cYEdDwV4kmCnGkKneORYxwkPBR1eIe8stN</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
+}
+# END TRUSTED KEYS
+$AllowLoopback = $false
 $BundleDirectory = 'fm_Data\StreamingAssets\aa\StandaloneWindows64'
 $CacheMarker = '.touchline-noir-cache'
-$PathPattern = '^[A-Za-z0-9][A-Za-z0-9 ._()+-]*(/[A-Za-z0-9][A-Za-z0-9 ._()+-]*)*$'
+$ToolMarker = '.touchline-noir-tool'
+$Segment = '[A-Za-z0-9](?:[A-Za-z0-9 ._()+-]*[A-Za-z0-9_()+-])?'
+$PathPattern = '^' + $Segment + '(?:/' + $Segment + ')*\z'
 $TaskName = 'TouchlineNoir Update Check'
 $AppId = 'TouchlineNoir.SkinUpdater'
 $ProtocolName = 'touchline-noir-update'
 $ReleasePage = 'https://github.com/touchline-noir/touchline-noir-skin/releases/latest'
 $RemindAfterHours = 72
+# System folders come from the OS, not from environment variables a user-level setting could redirect.
+$SystemDirectory = [Environment]::SystemDirectory
+$PowerShellExe = Join-Path $SystemDirectory 'WindowsPowerShell\v1.0\powershell.exe'
 $LauncherText = (@(
     '@echo off',
     'setlocal',
@@ -69,6 +81,7 @@ function Warn([string]$Text) { Write-Host $Text -ForegroundColor Yellow }
 
 function Stop-Updater([int]$Code) {
     if ($script:Transcript) { try { Stop-Transcript | Out-Null } catch { } ; $script:Transcript = $false }
+    if ($FromProtocol -and -not $NotifyCheck) { try { [void](Read-Host '창을 닫으려면 Enter를 누르세요') } catch { } }
     exit $Code
 }
 function Get-ErrorText($ErrorRecord) {
@@ -92,10 +105,17 @@ function Get-Text($Object, [string]$Name, [string]$Pattern) {
     if (-not ($value -is [string]) -or $value -cnotmatch $Pattern) { throw ('업데이트 정보 형식이 올바르지 않습니다: ' + $Name) }
     return $value
 }
+function Test-ReservedPath([string]$Path) {
+    foreach ($part in $Path.Split('/')) {
+        if ($part.Split('.')[0] -match '^(?i:con|prn|aux|nul|com[0-9]|lpt[0-9])\z') { return $true }
+    }
+    return $false
+}
 function Get-Entry($Object, [string]$What) {
     $path = Get-Text $Object 'path' $PathPattern
-    $sha = Get-Text $Object 'sha256' '^[0-9a-f]{64}$'
-    $url = Get-Text $Object 'url' '^https?://'
+    if (Test-ReservedPath $path) { throw ('업데이트 정보 형식이 올바르지 않습니다: path (' + $What + ')') }
+    $sha = Get-Text $Object 'sha256' '^[0-9a-f]{64}\z'
+    $url = Get-Text $Object 'url' '^https?://[^\s"<>\\]+\z'
     $size = 0L
     if (-not [long]::TryParse([string](Get-Prop $Object 'size'), [ref]$size) -or $size -lt 0 -or $size -gt 4GB) {
         throw ('업데이트 정보 형식이 올바르지 않습니다: size (' + $What + ')')
@@ -109,39 +129,94 @@ function Format-Size([long]$Bytes) {
     return ('{0} B' -f $Bytes)
 }
 function Format-PackageVersion([string]$Text) {
-    if ($Text -cmatch '^([0-9]+\.[0-9]+\.[0-9]+)((?:-[a-z0-9.]+)*?)-(classic|light)-windows$') {
+    if ($Text -cmatch '^([0-9]+\.[0-9]+\.[0-9]+)((?:-[a-z0-9.]+)*?)-(classic|light)-windows\z') {
         return ('V' + $Matches[1] + $Matches[2] + ' ' + $Matches[3].ToUpperInvariant())
     }
-    if ($Text) { return $Text }
+    if ($Text) {
+        $clean = $Text -replace '[^\x20-\x7E]', '?'
+        if ($clean.Length -gt 40) { $clean = $clean.Substring(0, 40) }
+        return $clean
+    }
     return '알 수 없음'
 }
 function Get-BytesSha256([byte[]]$Bytes) {
     $sha = [Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($sha.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
 }
+function Get-StreamSha256([IO.Stream]$Stream) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($Stream))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+}
 function Get-FileSha256([string]$Path) {
     $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-    try {
-        $sha = [Security.Cryptography.SHA256]::Create()
-        try { return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
-    } finally { $stream.Dispose() }
+    try { return (Get-StreamSha256 $stream) } finally { $stream.Dispose() }
+}
+function Test-ReparsePoint([string]$Path) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    return ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
 }
 function Test-FileMatch([string]$Path, [string]$Sha256, [long]$Size) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or (Test-ReparsePoint $Path)) { return $false }
     if ((Get-Item -LiteralPath $Path -Force).Length -ne $Size) { return $false }
     return ((Get-FileSha256 $Path) -ceq $Sha256)
 }
 function Ensure-Directory([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) { [void][IO.Directory]::CreateDirectory($Path) }
 }
-function Test-ManifestSignature([byte[]]$Data, [string]$SignatureText) {
-    try { $signature = [Convert]::FromBase64String($SignatureText.Trim()) } catch { return $false }
-    $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider
-    try {
-        $rsa.PersistKeyInCsp = $false
-        $rsa.FromXmlString($PublicKeyXml)
-        return [bool]$rsa.VerifyData($Data, 'SHA256', $signature)
-    } finally { $rsa.Dispose() }
+function Remove-TreeSafely([string]$Path) {
+    # Never follows junctions or symbolic links: a reparse point is removed as a link, its target is left alone.
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) { return }
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        if ($item.PSIsContainer) { [IO.Directory]::Delete($item.FullName, $false) } else { [IO.File]::Delete($item.FullName) }
+        return
+    }
+    if ($item.PSIsContainer) {
+        foreach ($child in @(Get-ChildItem -LiteralPath $item.FullName -Force)) { Remove-TreeSafely $child.FullName }
+        [IO.Directory]::Delete($item.FullName, $false)
+    } else {
+        if (($item.Attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) { $item.Attributes = [IO.FileAttributes]::Normal }
+        [IO.File]::Delete($item.FullName)
+    }
+}
+function ConvertTo-ArgumentText([string]$Value) {
+    # Windows command-line quoting (CommandLineToArgvW rules): always quoted, backslashes before quotes doubled.
+    $builder = New-Object Text.StringBuilder
+    [void]$builder.Append('"')
+    $slashes = 0
+    foreach ($c in $Value.ToCharArray()) {
+        if ($c -eq [char]92) { $slashes++; continue }
+        if ($c -eq [char]34) { [void]$builder.Append(('\' * ($slashes * 2 + 1)) + '"') }
+        else { [void]$builder.Append(('\' * $slashes) + $c) }
+        $slashes = 0
+    }
+    [void]$builder.Append(('\' * ($slashes * 2)) + '"')
+    return $builder.ToString()
+}
+function Join-ArgumentText([string[]]$Arguments) { return (($Arguments | ForEach-Object { ConvertTo-ArgumentText $_ }) -join ' ') }
+function Invoke-Child([string]$File, [string[]]$Arguments) {
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $File
+    $info.Arguments = Join-ArgumentText $Arguments
+    $info.UseShellExecute = $false
+    $process = [Diagnostics.Process]::Start($info)
+    try { $process.WaitForExit(); return $process.ExitCode } finally { $process.Dispose() }
+}
+function Test-ManifestSignatures([byte[]]$Data, [byte[]]$SignatureDocument) {
+    try { $document = (New-Object Text.UTF8Encoding($false, $true)).GetString($SignatureDocument).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { return $false }
+    if ((Get-Prop $document 'schema') -ne 1) { return $false }
+    foreach ($entry in @(Get-Prop $document 'signatures')) {
+        $keyId = [string](Get-Prop $entry 'key')
+        if ([string](Get-Prop $entry 'alg') -cne 'rsa-pkcs1-sha256' -or $keyId -cnotmatch '^[0-9a-f]{16}\z' -or -not $TrustedKeys.ContainsKey($keyId)) { continue }
+        try { $signature = [Convert]::FromBase64String(([string](Get-Prop $entry 'sig')).Trim()) } catch { continue }
+        $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider
+        try {
+            $rsa.PersistKeyInCsp = $false
+            $rsa.FromXmlString($TrustedKeys[$keyId])
+            if ($rsa.VerifyData($Data, 'SHA256', $signature)) { return $true }
+        } finally { $rsa.Dispose() }
+    }
+    return $false
 }
 function New-HttpClient {
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
@@ -157,7 +232,7 @@ function Assert-Url([string]$Url) {
     $uri = $null
     if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri)) { throw ('잘못된 주소입니다: ' + $Url) }
     if ($uri.Scheme -ceq 'https') { return $uri }
-    if ($uri.Scheme -ceq 'http' -and ($uri.Host -ceq '127.0.0.1' -or $uri.Host -ceq 'localhost')) { return $uri }
+    if ($AllowLoopback -and $uri.Scheme -ceq 'http' -and ($uri.Host -ceq '127.0.0.1' -or $uri.Host -ceq 'localhost')) { return $uri }
     throw ('https 주소만 받을 수 있습니다: ' + $Url)
 }
 function Get-SmallDownload($Client, [string]$Url, [long]$Limit) {
@@ -183,7 +258,7 @@ function Save-VerifiedDownload($Client, $Entry, [string]$Destination, [string]$L
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         $response = $null; $source = $null; $target = $null; $sha = $null
         try {
-            if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }
+            Remove-TreeSafely $partial
             $response = $Client.GetAsync($uri, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
             if (-not $response.IsSuccessStatusCode) { throw ('HTTP ' + [int]$response.StatusCode) }
             $source = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
@@ -206,7 +281,7 @@ function Save-VerifiedDownload($Client, $Entry, [string]$Destination, [string]$L
             $hash = ([BitConverter]::ToString($sha.Hash)).Replace('-', '').ToLowerInvariant()
             $target.Dispose(); $target = $null
             if ($done -ne $Entry.Size -or $hash -cne $Entry.Sha256) { throw ('받은 파일의 확인 값이 다릅니다 (' + $Label + ')') }
-            if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Force }
+            Remove-TreeSafely $Destination
             [IO.File]::Move($partial, $Destination)
             Write-Progress -Activity '내려받는 중' -Completed
             return
@@ -214,7 +289,7 @@ function Save-VerifiedDownload($Client, $Entry, [string]$Destination, [string]$L
             $message = Get-ErrorText $_
             if ($null -ne $target) { $target.Dispose(); $target = $null }
             Write-Progress -Activity '내려받는 중' -Completed
-            if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue }
+            try { Remove-TreeSafely $partial } catch { }
             if ($attempt -ge 3) { throw ('내려받기 실패: ' + $Label + ' (' + $message + ')') }
             Warn ('  다시 시도합니다 (' + $attempt + '/3): ' + $message)
             Start-Sleep -Seconds (2 * $attempt)
@@ -228,18 +303,36 @@ function Save-VerifiedDownload($Client, $Entry, [string]$Destination, [string]$L
 }
 function Copy-Verified([string]$Source, $Entry, [string]$Destination) {
     $partial = $Destination + '.partial'
-    if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }
+    Remove-TreeSafely $partial
     $in = [IO.File]::Open($Source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
     try {
         $out = [IO.File]::Open($partial, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
         try { $in.CopyTo($out, 1048576) } finally { $out.Dispose() }
     } finally { $in.Dispose() }
     if (-not (Test-FileMatch $partial $Entry.Sha256 $Entry.Size)) {
-        Remove-Item -LiteralPath $partial -Force
+        Remove-TreeSafely $partial
         throw ('게임 폴더에서 가져온 파일의 확인 값이 다릅니다: ' + $Entry.Path)
     }
-    if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Force }
+    Remove-TreeSafely $Destination
     [IO.File]::Move($partial, $Destination)
+}
+function Lock-PackageFiles($Steps) {
+    # Re-verify every package file through a handle that denies writing, deleting and renaming, and keep the handles open
+    # until the elevated install has finished: the installer then runs exactly the bytes checked here.
+    $leases = New-Object 'Collections.Generic.List[IO.FileStream]'
+    try {
+        foreach ($step in $Steps) {
+            if (Test-ReparsePoint $step.Destination) { throw ('패키지 파일이 링크로 바뀌어 있습니다: ' + $step.Entry.Path) }
+            $stream = [IO.File]::Open($step.Destination, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+            $leases.Add($stream)
+            if ($stream.Length -ne $step.Entry.Size -or (Get-StreamSha256 $stream) -cne $step.Entry.Sha256) { throw ('패키지 파일이 확인 뒤에 바뀌었습니다: ' + $step.Entry.Path) }
+            $stream.Position = 0
+        }
+        return ,$leases
+    } catch {
+        foreach ($lease in $leases) { $lease.Dispose() }
+        throw
+    }
 }
 function Test-FmRunning {
     $list = [Diagnostics.Process]::GetProcessesByName('fm')
@@ -253,6 +346,19 @@ function Read-Answer([string]$Prompt) {
     if ($Yes) { return 'Y' }
     return ([string](Read-Host $Prompt)).Trim()
 }
+function Read-JsonState([string]$Path) {
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        try { $state = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8) | ConvertFrom-Json; if ($null -ne $state) { return $state } } catch { }
+    }
+    return (New-Object psobject)
+}
+function Save-JsonState([string]$Path, $State) {
+    $temporary = $Path + '.tmp'
+    [IO.File]::WriteAllText($temporary, ($State | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
+    if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force }
+    [IO.File]::Move($temporary, $Path)
+}
+function Set-StateValue($State, [string]$Name, $Value) { $State | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force }
 
 # ---- New-version notification (opt-in; everything lives in this Windows user account) ----
 function Write-NotifyLog([string]$Text) {
@@ -268,43 +374,69 @@ function Limit-NotifyLog {
     } catch { }
 }
 function Get-NotifyStatePath { return (Join-Path $CacheRoot 'notify.json') }
-function Read-NotifyState {
-    $path = Get-NotifyStatePath
-    if (Test-Path -LiteralPath $path -PathType Leaf) {
-        try { $state = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8) | ConvertFrom-Json; if ($null -ne $state) { return $state } } catch { }
-    }
-    return (New-Object psobject)
-}
-function Set-StateValue($State, [string]$Name, $Value) { $State | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force }
-function Save-NotifyState($State) {
-    $path = Get-NotifyStatePath
-    $temporary = $path + '.tmp'
-    [IO.File]::WriteAllText($temporary, ($State | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
-    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
-    [IO.File]::Move($temporary, $path)
-}
+function Read-NotifyState { return (Read-JsonState (Get-NotifyStatePath)) }
+function Save-NotifyState($State) { Save-JsonState (Get-NotifyStatePath) $State }
 function Get-ScriptVersion([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return 0 }
     $match = [regex]::Match([IO.File]::ReadAllText($Path), '(?m)^\$UpdaterVersion = ([0-9]+)')
     if ($match.Success) { return [int]$match.Groups[1].Value }
     return 0
 }
+function Get-ExtraArguments {
+    # Only non-default settings are persisted, and only values that cannot break a command line.
+    $extra = @()
+    if (-not $CacheRoot.Equals($DefaultCacheRoot, [StringComparison]::OrdinalIgnoreCase)) { $extra += @('-CacheRoot', $CacheRoot) }
+    if ($ManifestUrl -cne $DefaultManifestUrl) { $extra += @('-ManifestUrl', $ManifestUrl) }
+    return ,$extra
+}
 function Sync-NotifyTool {
     # A stable copy that the scheduled check and the notification click use (the extracted folder may be moved or deleted).
     $tool = Join-Path $CacheRoot 'tool'
+    if (Test-ReparsePoint $tool) { Remove-TreeSafely $tool }
     Ensure-Directory $tool
+    $marker = Join-Path $tool $ToolMarker
+    if (-not (Test-Path -LiteralPath $marker)) { [IO.File]::WriteAllText($marker, 'touchline-noir updater tool copy') }
     $toolScript = Join-Path $tool 'Update-TouchlineNoir.ps1'
     $self = [IO.Path]::GetFullPath($PSCommandPath)
     if (-not $self.Equals([IO.Path]::GetFullPath($toolScript), [StringComparison]::OrdinalIgnoreCase)) {
-        if ((Get-ScriptVersion $toolScript) -le $UpdaterVersion) { Copy-Item -LiteralPath $self -Destination $toolScript -Force }
+        if ((Get-ScriptVersion $toolScript) -le $UpdaterVersion) { Remove-TreeSafely $toolScript; Copy-Item -LiteralPath $self -Destination $toolScript -Force }
         $readme = Join-Path (Split-Path -Parent $self) 'README-UPDATER-KO.txt'
-        if (Test-Path -LiteralPath $readme -PathType Leaf) { Copy-Item -LiteralPath $readme -Destination (Join-Path $tool 'README-UPDATER-KO.txt') -Force }
+        if (Test-Path -LiteralPath $readme -PathType Leaf) { $toolReadme = Join-Path $tool 'README-UPDATER-KO.txt'; Remove-TreeSafely $toolReadme; Copy-Item -LiteralPath $readme -Destination $toolReadme -Force }
     }
     $launcher = Join-Path $tool 'Update-TouchlineNoir.cmd'
     $wanted = [Text.Encoding]::ASCII.GetBytes($LauncherText)
-    $current = $(if (Test-Path -LiteralPath $launcher -PathType Leaf) { [IO.File]::ReadAllBytes($launcher) } else { [byte[]]@() })
-    if (($current -join ',') -cne ($wanted -join ',')) { [IO.File]::WriteAllBytes($launcher, $wanted) }
+    $current = $(if ((Test-Path -LiteralPath $launcher -PathType Leaf) -and -not (Test-ReparsePoint $launcher)) { [IO.File]::ReadAllBytes($launcher) } else { [byte[]]@() })
+    if (($current -join ',') -cne ($wanted -join ',')) { Remove-TreeSafely $launcher; [IO.File]::WriteAllBytes($launcher, $wanted) }
     return $tool
+}
+function Register-NotifyHooks {
+    # Writes the notification name, the click target and the scheduled check; only what differs is rewritten.
+    # The click target runs powershell.exe directly (no cmd.exe parsing); Windows passes no URL text to it (no %1).
+    $tool = Join-Path $CacheRoot 'tool'
+    $toolScript = Join-Path $tool 'Update-TouchlineNoir.ps1'
+    $extra = Get-ExtraArguments
+    $appKey = 'HKCU:\Software\Classes\AppUserModelId\' + $AppId
+    if (-not (Test-Path -LiteralPath $appKey)) { [void](New-Item -Path $appKey -Force) }
+    [void](New-ItemProperty -LiteralPath $appKey -Name 'DisplayName' -Value '터치라인 누아르 스킨' -PropertyType String -Force)
+    $protocolKey = 'HKCU:\Software\Classes\' + $ProtocolName
+    $commandKey = $protocolKey + '\shell\open\command'
+    if (-not (Test-Path -LiteralPath $commandKey)) { [void](New-Item -Path $commandKey -Force) }
+    Set-Item -LiteralPath $protocolKey -Value 'URL:Touchline Noir Update'
+    [void](New-ItemProperty -LiteralPath $protocolKey -Name 'URL Protocol' -Value '' -PropertyType String -Force)
+    $command = (ConvertTo-ArgumentText $PowerShellExe) + ' ' + (Join-ArgumentText (@('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $toolScript, '-FromProtocol') + $extra))
+    if ([string](Get-Item -LiteralPath $commandKey).GetValue('') -cne $command) { Set-Item -LiteralPath $commandKey -Value $command }
+    $arguments = '--headless ' + (Join-ArgumentText (@($PowerShellExe, '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $toolScript, '-NotifyCheck') + $extra))
+    $conhost = Join-Path $SystemDirectory 'conhost.exe'
+    $existing = Get-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction SilentlyContinue
+    if ($null -ne $existing -and @($existing.Actions).Count -eq 1 -and [string]$existing.Actions[0].Execute -ceq $conhost -and [string]$existing.Actions[0].Arguments -ceq $arguments) { return }
+    $action = New-ScheduledTaskAction -Execute $conhost -Argument $arguments -WorkingDirectory $tool
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $logon = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $logon.Delay = 'PT3M'
+    $repeat = New-ScheduledTaskTrigger -Once -At ([DateTime]::Now.AddMinutes(30)) -RepetitionInterval (New-TimeSpan -Hours 3)
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    [void](Register-ScheduledTask -TaskName $TaskName -TaskPath '\' -Action $action -Trigger @($logon, $repeat) -Settings $settings -Principal $principal -Description '터치라인 누아르 스킨 새 버전 알림. 끄기: Update-TouchlineNoir.cmd -Notify Off' -Force)
 }
 function Initialize-Toast {
     [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
@@ -328,33 +460,8 @@ function Show-NoirToast([string]$Title, [string]$Body1, [string]$Body2, [string]
     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($AppId).Show($toast)
 }
 function Enable-Notify([string]$Game, [string]$ThemeName) {
-    $tool = Sync-NotifyTool
-    $toolScript = Join-Path $tool 'Update-TouchlineNoir.ps1'
-    $toolLauncher = Join-Path $tool 'Update-TouchlineNoir.cmd'
-    $extra = ''
-    if (-not $CacheRoot.Equals($DefaultCacheRoot, [StringComparison]::OrdinalIgnoreCase)) { $extra += ' -CacheRoot "' + $CacheRoot + '"' }
-    if ($ManifestUrl -cne $DefaultManifestUrl) { $extra += ' -ManifestUrl "' + $ManifestUrl + '"' }
-    # Name shown on the notification, and the click target (opens the updater in a console window).
-    $appKey = 'HKCU:\Software\Classes\AppUserModelId\' + $AppId
-    if (-not (Test-Path -LiteralPath $appKey)) { [void](New-Item -Path $appKey -Force) }
-    [void](New-ItemProperty -LiteralPath $appKey -Name 'DisplayName' -Value '터치라인 누아르 스킨' -PropertyType String -Force)
-    $protocolKey = 'HKCU:\Software\Classes\' + $ProtocolName
-    $commandKey = $protocolKey + '\shell\open\command'
-    if (-not (Test-Path -LiteralPath $commandKey)) { [void](New-Item -Path $commandKey -Force) }
-    Set-Item -LiteralPath $protocolKey -Value 'URL:Touchline Noir Update'
-    [void](New-ItemProperty -LiteralPath $protocolKey -Name 'URL Protocol' -Value '' -PropertyType String -Force)
-    Set-Item -LiteralPath $commandKey -Value ('"' + (Join-Path $env:SystemRoot 'System32\cmd.exe') + '" /c ""' + $toolLauncher + '"' + $extra + '"')
-    # Per-user check at logon (+3 min) and every 3 hours, in a console without a window.
-    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $arguments = '--headless "' + $powershell + '" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $toolScript + '" -NotifyCheck' + $extra
-    $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\conhost.exe') -Argument $arguments -WorkingDirectory $tool
-    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $logon = New-ScheduledTaskTrigger -AtLogOn -User $user
-    $logon.Delay = 'PT3M'
-    $repeat = New-ScheduledTaskTrigger -Once -At ([DateTime]::Now.AddMinutes(30)) -RepetitionInterval (New-TimeSpan -Hours 3)
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
-    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-    [void](Register-ScheduledTask -TaskName $TaskName -TaskPath '\' -Action $action -Trigger @($logon, $repeat) -Settings $settings -Principal $principal -Description '터치라인 누아르 스킨 새 버전 알림. 끄기: Update-TouchlineNoir.cmd -Notify Off' -Force)
+    [void](Sync-NotifyTool)
+    Register-NotifyHooks
     $state = Read-NotifyState
     Set-StateValue $state 'enabled' $true
     Set-StateValue $state 'declined' $false
@@ -376,7 +483,7 @@ function Disable-Notify {
     Save-NotifyState $state
     $tool = [IO.Path]::GetFullPath((Join-Path $CacheRoot 'tool'))
     $self = [IO.Path]::GetFullPath($PSCommandPath)
-    if ((Test-Path -LiteralPath $tool) -and -not $self.StartsWith($tool + '\', [StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath $tool -Recurse -Force }
+    if ((Test-Path -LiteralPath (Join-Path $tool $ToolMarker) -PathType Leaf) -and -not $self.StartsWith($tool + '\', [StringComparison]::OrdinalIgnoreCase)) { Remove-TreeSafely $tool }
     Good '새 버전 알림을 껐습니다. 작업 스케줄러 항목과 알림 등록을 지웠습니다.'
 }
 function Invoke-NotifyOffer([string]$Game, [string]$ThemeName) {
@@ -385,6 +492,7 @@ function Invoke-NotifyOffer([string]$Game, [string]$ThemeName) {
         $state = Read-NotifyState
         if ((Get-Prop $state 'enabled') -eq $true) {
             [void](Sync-NotifyTool)
+            Register-NotifyHooks
             Set-StateValue $state 'game_path' $Game
             Set-StateValue $state 'theme' $ThemeName
             Save-NotifyState $state
@@ -396,7 +504,7 @@ function Invoke-NotifyOffer([string]$Game, [string]$ThemeName) {
         Note '  로그인할 때와 3시간마다 업데이트 정보만 확인합니다. FM을 하는 동안에는 알리지 않습니다.'
         Note '  나중에 바꾸려면: Update-TouchlineNoir.cmd -Notify On  또는  -Notify Off'
         $answer = ([string](Read-Host '알림 켜기 (Y/N)')).Trim()
-        if ($answer -match '^(y|yes|ㅛ|예|네)$') { Enable-Notify $Game $ThemeName }
+        if ($answer -match '^(y|yes|ㅛ|예|네)\z') { Enable-Notify $Game $ThemeName }
         else {
             Set-StateValue $state 'declined' $true
             Save-NotifyState $state
@@ -410,11 +518,18 @@ try {
         throw 'Windows PowerShell 5.1에서 실행해 주세요. Update-TouchlineNoir.cmd를 두 번 클릭하면 됩니다.'
     }
     if (-not [Environment]::Is64BitProcess) { throw '64비트 Windows PowerShell에서 실행해 주세요. Update-TouchlineNoir.cmd를 두 번 클릭하면 됩니다.' }
-    if ($Notify -and $Notify -notmatch '^(on|off)$') { throw '-Notify 뒤에는 On 또는 Off 를 써 주세요.' }
+    if ($Notify -and $Notify -notmatch '^(on|off)\z') { throw '-Notify 뒤에는 On 또는 Off 를 써 주세요.' }
     if (-not $CacheRoot) { $CacheRoot = $DefaultCacheRoot }
-    $CacheRoot = [IO.Path]::GetFullPath($CacheRoot)
+    if ($CacheRoot -match '["%\x00-\x1f]') { throw '-CacheRoot 값에 쓸 수 없는 문자(" % 또는 제어 문자)가 있습니다.' }
+    $CacheRoot = [IO.Path]::GetFullPath($CacheRoot).TrimEnd('\')
+    $cacheDrive = [IO.Path]::GetPathRoot($CacheRoot)
+    if ($CacheRoot.Length -le 2 -or $cacheDrive -cnotmatch '^[A-Za-z]:\\\z' -or (New-Object IO.DriveInfo($cacheDrive)).DriveType -ne [IO.DriveType]::Fixed) {
+        throw '-CacheRoot는 이 컴퓨터 고정 드라이브의 폴더(드라이브 맨 위 제외)여야 합니다.'
+    }
     Ensure-Directory $CacheRoot
     if (-not $ManifestUrl) { $ManifestUrl = $DefaultManifestUrl }
+    if ($ManifestUrl -match '["%\s]') { throw '-ManifestUrl 값에 쓸 수 없는 문자가 있습니다.' }
+    [void](Assert-Url $ManifestUrl)
     if ($Notify -ieq 'off') { Disable-Notify; Stop-Updater 0 }
     $notifyState = Read-NotifyState
     $silentToast = (Get-Prop $notifyState 'silent_toast') -eq $true
@@ -426,6 +541,7 @@ try {
         if ((Get-Prop $notifyState 'enabled') -ne $true) { Write-NotifyLog '알림이 꺼져 있어 확인하지 않음'; Stop-Updater 0 }
         if ((Test-FmRunning) -and (Get-Prop $notifyState 'notify_while_fm_running') -ne $true) { Write-NotifyLog 'FM 실행 중: 다음 확인 때 다시 봄'; Stop-Updater 0 }
         Write-NotifyLog ('확인 시작 (업데이트 도구 v' + $UpdaterVersion + ')')
+        try { Register-NotifyHooks } catch { Write-NotifyLog ('알림 등록 갱신 실패: ' + (Get-ErrorText $_)) }
     } else {
         try {
             $logs = Join-Path $CacheRoot 'Logs'
@@ -445,11 +561,11 @@ try {
     for ($attempt = 1; $attempt -le 2 -and -not $verified; $attempt++) {
         try {
             $manifestBytes = Get-SmallDownload $client $ManifestUrl 4MB
-            $signatureBytes = Get-SmallDownload $client ($ManifestUrl + '.sig') 64KB
+            $signatureBytes = Get-SmallDownload $client ($ManifestUrl + '.sigs') 64KB
         } catch {
             throw ('업데이트 정보를 받지 못했습니다. 인터넷 연결을 확인해 주세요. (' + (Get-ErrorText $_) + ')')
         }
-        $verified = Test-ManifestSignature $manifestBytes ([Text.Encoding]::ASCII.GetString($signatureBytes))
+        $verified = Test-ManifestSignatures $manifestBytes $signatureBytes
         if (-not $verified -and $attempt -eq 1) { Start-Sleep -Seconds 3 }
     }
     if (-not $verified) { throw '업데이트 정보의 서명이 맞지 않습니다. 아무 파일도 받지 않고 멈춥니다.' }
@@ -458,9 +574,21 @@ try {
     if ((Get-Prop $manifest 'schema') -ne 1 -or (Get-Prop $manifest 'product') -cne 'touchline-noir-skin') {
         throw '이 업데이트 도구가 읽을 수 없는 업데이트 정보입니다. GitHub 릴리스에서 TOUCHLINE-NOIR-UPDATER.zip을 새로 받아 주세요.'
     }
-    $latestVersion = Get-Text $manifest 'version' '^[0-9]+\.[0-9]+\.[0-9]+$'
-    $latestDisplay = Get-Text $manifest 'display_version' '^V[0-9][0-9A-Za-z .-]*$'
+    $latestVersion = Get-Text $manifest 'version' '^[0-9]+\.[0-9]+\.[0-9]+\z'
+    $latestDisplay = Get-Text $manifest 'display_version' '^V[0-9][0-9A-Za-z .-]*\z'
+    $latestCore = Get-CoreVersion $latestVersion
     $manifestSha = Get-BytesSha256 $manifestBytes
+    # Rollback protection: never accept an older signed manifest than one already seen with this cache.
+    $updaterStatePath = Join-Path $CacheRoot 'updater-state.json'
+    $updaterState = Read-JsonState $updaterStatePath
+    $highestSeen = Get-CoreVersion ([string](Get-Prop $updaterState 'highest_manifest_version'))
+    if ($null -ne $highestSeen -and $latestCore -lt $highestSeen) {
+        throw ('전에 받은 업데이트 정보(V' + $highestSeen + ')보다 오래된 정보(V' + $latestCore + ')라 멈춥니다. 잠시 뒤 다시 실행해 주세요.')
+    }
+    if ($null -eq $highestSeen -or $latestCore -gt $highestSeen) {
+        Set-StateValue $updaterState 'highest_manifest_version' $latestVersion
+        Save-JsonState $updaterStatePath $updaterState
+    }
     Good ('서명 확인 완료 · 공개 최신 버전: ' + $latestDisplay)
 
     # The updater replaces only its own script (never the running .cmd launcher), then restarts once.
@@ -479,7 +607,9 @@ try {
             if ($entry.Path -cnotin @('Update-TouchlineNoir.ps1', 'README-UPDATER-KO.txt')) { continue }
             $staged = Join-Path $staging ($entry.Sha256.Substring(0, 16) + '-' + $entry.Path)
             if (-not (Test-FileMatch $staged $entry.Sha256 $entry.Size)) { Save-VerifiedDownload $client $entry $staged $entry.Path }
-            Copy-Item -LiteralPath $staged -Destination (Join-Path $selfDirectory $entry.Path) -Force
+            $destination = Join-Path $selfDirectory $entry.Path
+            Remove-TreeSafely $destination
+            Copy-Item -LiteralPath $staged -Destination $destination -Force
             if ($entry.Path -ceq 'Update-TouchlineNoir.ps1') { $replaced = $true }
         }
         if ($replaced) {
@@ -492,8 +622,7 @@ try {
             }
             if ($script:Transcript) { try { Stop-Transcript | Out-Null } catch { } ; $script:Transcript = $false }
             Say '새 업데이트 도구로 다시 시작합니다.'
-            & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') @forward
-            exit $LASTEXITCODE
+            exit (Invoke-Child $PowerShellExe $forward)
         }
     }
     if ($UpdaterVersion -lt $minUpdater) {
@@ -548,7 +677,7 @@ try {
         if ($identities.Count -lt 1) { throw '업데이트 정보 형식이 올바르지 않습니다: identity' }
         foreach ($identity in $identities) {
             $relative = Get-Text $identity 'relative_path' $PathPattern
-            $expected = Get-Text $identity 'sha256' '^[0-9a-f]{64}$'
+            $expected = Get-Text $identity 'sha256' '^[0-9a-f]{64}\z'
             if (-not $identityCache.ContainsKey($relative)) {
                 $file = Join-Path $game $relative.Replace('/', '\')
                 $identityCache[$relative] = $(if (Test-Path -LiteralPath $file -PathType Leaf) { Get-FileSha256 $file } else { '' })
@@ -573,7 +702,7 @@ try {
         Warn 'FM27이 업데이트되었다면 그 빌드에 맞춘 스킨이 나올 때까지 기다려 주세요. 게임 파일은 바꾸지 않았습니다.'
         Stop-Updater 2
     }
-    $buildId = Get-Text $build 'game_build' '^[0-9]+$'
+    $buildId = Get-Text $build 'game_build' '^[0-9]+\z'
     Say ('게임 빌드: Steam ' + $buildId + ' (지원)')
 
     # Installed state: the installer's last receipt names version and theme; file hashes decide what changes.
@@ -585,7 +714,7 @@ try {
     $receiptVersion = [string](Get-Prop $receipt 'Version')
     $receiptAction = [string](Get-Prop $receipt 'Action')
     $receiptTheme = ''
-    if ($receiptVersion -cmatch '-(classic|light)-windows$') { $receiptTheme = $Matches[1].ToUpperInvariant() }
+    if ($receiptVersion -cmatch '-(classic|light)-windows\z') { $receiptTheme = $Matches[1].ToUpperInvariant() }
     if ($receiptAction -ceq 'Restore') { Say '설치 기록: 스킨을 되돌린 상태(원래 FM 화면)' }
     elseif ($receiptVersion) { Say ('설치 기록: ' + (Format-PackageVersion $receiptVersion)) }
     else { Say '설치 기록: 없음' }
@@ -611,16 +740,9 @@ try {
     }
     if ($Notify -ieq 'on') { Enable-Notify $game $chosen; Stop-Updater 0 }
     $package = Get-Prop (Get-Prop $build 'themes') $chosen
-    $packageVersion = Get-Text $package 'package_version' '^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)*-(classic|light)-windows$'
-    $packageDisplay = Get-Text $package 'display_name' '^V[0-9][0-9A-Za-z .-]*$'
+    $packageVersion = Get-Text $package 'package_version' '^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)*-(classic|light)-windows\z'
+    $packageDisplay = Get-Text $package 'display_name' '^V[0-9][0-9A-Za-z .-]*\z'
 
-    $installedCore = Get-CoreVersion $receiptVersion
-    $latestCore = Get-CoreVersion $latestVersion
-    if (-not $Theme -and $null -ne $installedCore -and $installedCore -gt $latestCore -and $receiptAction -cne 'Restore') {
-        if ($NotifyCheck) { Write-NotifyLog '설치된 스킨이 공개 최신보다 새 버전: 알리지 않음'; Stop-Updater 0 }
-        Good ('설치된 스킨(' + (Format-PackageVersion $receiptVersion) + ')이 공개 최신 버전보다 새 버전입니다. 그대로 둡니다.')
-        Stop-Updater 0
-    }
     $receiptStamp = $receiptVersion + '|' + [string](Get-Prop $receipt 'TimestampUtc') + '|' + $chosen
     if ($NotifyCheck -and (Get-Prop $notifyState 'ok_manifest') -ceq $manifestSha -and (Get-Prop $notifyState 'ok_receipt') -ceq $receiptStamp) {
         Write-NotifyLog ('최신 상태 그대로: ' + $packageDisplay)
@@ -628,8 +750,11 @@ try {
     }
 
     $entries = @(@(Get-Prop $package 'files') | ForEach-Object { Get-Entry $_ $chosen })
-    if (@($entries | ForEach-Object { $_.Path } | Select-Object -Unique).Count -ne $entries.Count) { throw '업데이트 정보에 같은 파일이 두 번 있습니다.' }
-    $packageRoot = Join-Path $CacheRoot ('packages\' + $packageVersion)
+    if (@($entries | ForEach-Object { $_.Path.ToLowerInvariant() } | Select-Object -Unique).Count -ne $entries.Count) { throw '업데이트 정보에 같은 파일이 두 번 있습니다.' }
+    $packagesRoot = Join-Path $CacheRoot 'packages'
+    if (Test-ReparsePoint $packagesRoot) { Remove-TreeSafely $packagesRoot }
+    $packageRoot = Join-Path $packagesRoot $packageVersion
+    if (Test-ReparsePoint $packageRoot) { Remove-TreeSafely $packageRoot }
     Ensure-Directory $packageRoot
     $markerPath = Join-Path $packageRoot $CacheMarker
     if (-not (Test-Path -LiteralPath $markerPath)) { [IO.File]::WriteAllText($markerPath, $packageVersion) }
@@ -649,9 +774,9 @@ try {
     $bundles = @()
     foreach ($file in @(Get-Prop $packageManifest 'files')) {
         if ([string](Get-Prop $file 'kind') -cne 'bundle') { continue }
-        $name = Get-Text $file 'name' '^[A-Za-z0-9._-]+\.bundle$'
-        $installedHash = Get-Text $file 'installed_sha256' '^[0-9a-f]{64}$'
-        $sourceHash = Get-Text $file 'source_sha256' '^[0-9a-f]{64}$'
+        $name = Get-Text $file 'name' '^[A-Za-z0-9._-]+\.bundle\z'
+        $installedHash = Get-Text $file 'installed_sha256' '^[0-9a-f]{64}\z'
+        $sourceHash = Get-Text $file 'source_sha256' '^[0-9a-f]{64}\z'
         $previous = @(Get-Prop $file 'previous_sha256')
         $target = Join-Path $game ($BundleDirectory + '\' + $name)
         $current = $(if (Test-Path -LiteralPath $target -PathType Leaf) { Get-FileSha256 $target } else { '' })
@@ -664,6 +789,16 @@ try {
     if ($bundles.Count -lt 1) { throw 'package.json에 스킨 파일 목록이 없습니다.' }
     $changing = @($bundles | Where-Object { $_.State -cne 'current' })
     $unknown = @($bundles | Where-Object { $_.State -ceq 'unknown' })
+    $knownOlder = @($bundles | Where-Object { $_.State -cin @('stock', 'previous') })
+
+    # A receipt that names a newer, non-public build is trusted only while no installed file is a known public or stock file
+    # (the author's own test builds); a receipt that merely claims "newer" over known older files does not stop the update.
+    $installedCore = Get-CoreVersion $receiptVersion
+    if ($changing.Count -gt 0 -and $knownOlder.Count -eq 0 -and $null -ne $installedCore -and $installedCore -gt $latestCore -and $receiptAction -cne 'Restore') {
+        if ($NotifyCheck) { Write-NotifyLog '설치된 스킨이 공개 최신보다 새 버전: 알리지 않음'; Stop-Updater 0 }
+        Good ('설치된 스킨(' + (Format-PackageVersion $receiptVersion) + ')이 공개 최신 버전보다 새 버전입니다. 그대로 둡니다.')
+        Stop-Updater 0
+    }
 
     if ($NotifyCheck) {
         if ($changing.Count -eq 0) {
@@ -705,7 +840,7 @@ try {
         $destination = Join-Path $packageRoot $entry.Local
         $have = Test-FileMatch $destination $entry.Sha256 $entry.Size
         $localSource = $null
-        if (-not $have -and $entry.Path -cmatch '^payload/([A-Za-z0-9._-]+\.bundle)$') {
+        if (-not $have -and $entry.Path -cmatch '^payload/([A-Za-z0-9._-]+\.bundle)\z') {
             $bundleName = $Matches[1]
             $same = @($bundles | Where-Object { $_.Name -ceq $bundleName -and $_.Current -ceq $entry.Sha256 })
             if ($same.Count -eq 1) { $localSource = $same[0].Target }
@@ -723,7 +858,7 @@ try {
     if ($notes.Count -gt 0) {
         Say ''
         Say '바뀐 점:'
-        foreach ($line in $notes) { Say ('  - ' + [string]$line) }
+        foreach ($line in $notes) { Say ('  - ' + ([string]$line -replace '[\x00-\x1f]', ' ')) }
     }
     Say ''
     if ($CheckOnly) {
@@ -731,19 +866,21 @@ try {
         Stop-Updater 0
     }
     $answer = Read-Answer '업데이트할까요? (Y/N)'
-    if ($answer -notmatch '^(y|yes|ㅛ|예|네)$') {
+    if ($answer -notmatch '^(y|yes|ㅛ|예|네)\z') {
         Say '취소했습니다. 게임 파일은 바꾸지 않았습니다.'
         Stop-Updater 3
     }
 
     foreach ($step in $plan) {
         if ($step.Have) { continue }
-        Ensure-Directory (Split-Path -Parent $step.Destination)
+        $parent = Split-Path -Parent $step.Destination
+        if (Test-ReparsePoint $parent) { Remove-TreeSafely $parent }
+        Ensure-Directory $parent
         if ($step.LocalSource) { Copy-Verified $step.LocalSource $step.Entry $step.Destination }
         else { Save-VerifiedDownload $client $step.Entry $step.Destination $step.Entry.Path }
     }
-    Get-ChildItem -LiteralPath $packageRoot -Recurse -Force -File -Filter '*.partial' | Remove-Item -Force
     foreach ($step in $plan) {
+        Remove-TreeSafely ($step.Destination + '.partial')
         if (-not (Test-FileMatch $step.Destination $step.Entry.Sha256 $step.Entry.Size)) { throw ('패키지 파일 확인 실패: ' + $step.Entry.Path) }
     }
     Good ('새 버전 패키지 준비 완료: ' + $packageRoot)
@@ -758,16 +895,19 @@ try {
         Start-Sleep -Seconds 3
     }
 
-    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $launch = Join-Path $packageRoot 'Launch.ps1'
-    Say ''
-    Say '설치 전 검사 (읽기만 함)...'
-    & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $launch -Action Check -GamePath $game -NonInteractive -NoPause
-    if ($LASTEXITCODE -ne 0) { throw '설치 전 검사에서 멈췄습니다. 위의 ERROR를 확인해 주세요. 게임 파일은 바꾸지 않았습니다.' }
-    Say ''
-    Say '설치합니다. 관리자 권한 확인 창(UAC)에서 "예"를 누르면 새 창에서 설치가 진행됩니다.'
-    & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $launch -Action Install -GamePath $game -NoPause
-    $installCode = $LASTEXITCODE
+    $leases = Lock-PackageFiles $plan
+    try {
+        Say ''
+        Say '설치 전 검사 (읽기만 함)...'
+        $checkCode = Invoke-Child $PowerShellExe @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $launch, '-Action', 'Check', '-GamePath', $game, '-NonInteractive', '-NoPause')
+        if ($checkCode -ne 0) { throw '설치 전 검사에서 멈췄습니다. 위의 ERROR를 확인해 주세요. 게임 파일은 바꾸지 않았습니다.' }
+        Say ''
+        Say '설치합니다. 관리자 권한 확인 창(UAC)에서 "예"를 누르면 새 창에서 설치가 진행됩니다.'
+        $installCode = Invoke-Child $PowerShellExe @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $launch, '-Action', 'Install', '-GamePath', $game, '-NoPause')
+    } finally {
+        foreach ($lease in $leases) { $lease.Dispose() }
+    }
     if ($installCode -ne 0) { throw ('설치가 끝나지 않았습니다 (코드 ' + $installCode + '). 관리자 권한 확인 창에서 "아니요"를 눌렀거나 설치 창에 ERROR가 있습니다. 설치 도구는 실패하면 바꾼 파일을 되돌립니다.') }
 
     $left = @($bundles | Where-Object { (Get-FileSha256 $_.Target) -cne $_.Installed })
@@ -776,10 +916,11 @@ try {
     Good ('업데이트 완료: ' + $packageDisplay)
     Say ('이 버전의 설치 도구 폴더(되돌리기 3-Restore.cmd 포함): ' + $packageRoot)
 
-    foreach ($old in @(Get-ChildItem -LiteralPath (Join-Path $CacheRoot 'packages') -Directory -Force)) {
+    foreach ($old in @(Get-ChildItem -LiteralPath $packagesRoot -Force)) {
         if ($old.FullName -ieq $packageRoot) { continue }
-        if (Test-Path -LiteralPath (Join-Path $old.FullName $CacheMarker) -PathType Leaf) {
-            try { Remove-Item -LiteralPath $old.FullName -Recurse -Force } catch { }
+        if (($old.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { Remove-TreeSafely $old.FullName; continue }
+        if ($old.PSIsContainer -and (Test-Path -LiteralPath (Join-Path $old.FullName $CacheMarker) -PathType Leaf)) {
+            try { Remove-TreeSafely $old.FullName } catch { }
         }
     }
     Invoke-NotifyOffer $game $chosen

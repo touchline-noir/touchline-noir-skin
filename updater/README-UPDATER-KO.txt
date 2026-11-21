@@ -14,11 +14,12 @@ TOUCHLINE NOIR SKIN UPDATER · Football Manager 27 · Windows Steam
 
 하는 일
 - GitHub(touchline-noir/touchline-noir-skin) 최신 릴리스의 업데이트 정보와 서명을 받아,
-  도구 안에 들어 있는 공개 키로 확인합니다. 서명이 맞지 않으면 아무것도 받지 않고 멈춥니다.
+  도구 안에 들어 있는 공개 키로 확인합니다. 서명이 맞지 않거나, 전에 받은 것보다 오래된 정보면 멈춥니다.
 - 마지막 설치 기록으로 테마(CLASSIC / LIGHT)를 알아내고, 설치된 스킨 파일과 비교해 바뀐 파일만 내려받습니다.
   받은 파일은 모두 SHA-256 값으로 확인합니다.
-- 새 버전 설치 패키지를 %LOCALAPPDATA%\TouchlineNoir\packages 에 만들고, 그 패키지의 설치 과정
-  (2-Install.cmd와 같은 검사 · 원본 백업 · 설치 후 확인)으로 설치합니다.
+- 새 버전 설치 패키지를 %LOCALAPPDATA%\TouchlineNoir\packages 에 만들고, 설치 직전에 모든 파일을 다시 확인해
+  설치가 끝날 때까지 바꿀 수 없게 잡아 둔 채 그 패키지의 설치 과정(2-Install.cmd와 같은 검사 · 원본 백업 ·
+  설치 후 확인)으로 설치합니다.
 - FM 원본 파일 백업은 지금처럼 게임 폴더의 NativeCalmBackup 에 그대로 둡니다.
 - 게임 본체 · 외부 플러그인 · 사용자 글꼴 · 설정 · 세이브는 바꾸지 않습니다.
 - 업데이트 도구 자체에 새 버전이 있으면 이 스크립트를 먼저 바꾸고 다시 시작합니다.
@@ -45,10 +46,16 @@ TOUCHLINE NOIR SKIN UPDATER · Football Manager 27 · Windows Steam
   -Notify On      새 버전 알림을 켭니다.   -Notify Off  알림을 끕니다.
   예) Update-TouchlineNoir.cmd -Theme LIGHT
 
+안전
+- 공식 배포처는 GitHub의 touchline-noir/touchline-noir-skin 릴리스뿐입니다. 다른 곳에 올라온 스킨 · 업데이트 파일은
+  실행하지 마세요. 스킨 설치 과정은 관리자 권한으로 실행됩니다.
+- 서명 공개 키 지문(SHA-256, 모듈러스): d1472c957cdab4de3380982478e743dab8e1974219437087f20d8a2c9a85ba68
+  (2026-11-22에 키를 바꿨습니다. v1 · v2 업데이트 도구는 실행할 때 저절로 v3로 바뀝니다.)
+- 실행 기록(%LOCALAPPDATA%\TouchlineNoir\Logs)에는 Windows 사용자 이름, PC 이름, 폴더 경로가 들어 있습니다.
+  다른 사람에게 보내기 전에 확인하세요.
+
 알아 둘 점
 - Steam 빌드 26620374용입니다. FM27이 업데이트되어 빌드가 바뀌면 "아직 지원하지 않는 빌드"라고 알려 주고
   아무것도 바꾸지 않습니다. 그 빌드용 스킨이 나오면 다시 실행해 주세요.
 - 원래 FM 화면으로 되돌리려면 설치 패키지 폴더의 3-Restore.cmd 를 씁니다.
   (업데이트 도구로 설치했다면 %LOCALAPPDATA%\TouchlineNoir\packages 의 해당 버전 폴더)
-- 실행 기록: %LOCALAPPDATA%\TouchlineNoir\Logs
-- 서명 공개 키 지문(SHA-256, 모듈러스): 27809a0ba919ee91e830dad5300026965bd4f3850153b09bba80562ac19b722b
