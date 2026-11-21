@@ -21,6 +21,20 @@ TOUCHLINE NOIR SKIN UPDATER · Football Manager 27 · Windows Steam
   (2-Install.cmd와 같은 검사 · 원본 백업 · 설치 후 확인)으로 설치합니다.
 - FM 원본 파일 백업은 지금처럼 게임 폴더의 NativeCalmBackup 에 그대로 둡니다.
 - 게임 본체 · 외부 플러그인 · 사용자 글꼴 · 설정 · 세이브는 바꾸지 않습니다.
+- 업데이트 도구 자체에 새 버전이 있으면 이 스크립트를 먼저 바꾸고 다시 시작합니다.
+
+새 버전 알림 (선택)
+- 업데이트를 마쳤거나 "이미 최신"일 때 한 번 물어봅니다. 켜 두면 로그인할 때와 3시간마다 업데이트 정보만
+  확인하고, 새 버전이 있으면 Windows 알림을 띄웁니다. FM이 실행 중일 때는 알리지 않고,
+  같은 버전은 사흘에 한 번만 다시 알립니다.
+- 알림을 누르면 업데이트 도구가 열립니다. 설치는 지금처럼 Y 확인과 관리자 권한 확인을 거칩니다.
+- 켜면 이 Windows 사용자 계정에만, 관리자 권한 없이 다음이 만들어집니다.
+    작업 스케줄러 작업        TouchlineNoir Update Check
+    알림 이름 등록            HKCU\Software\Classes\AppUserModelId\TouchlineNoir.SkinUpdater
+    알림 클릭 연결            HKCU\Software\Classes\touchline-noir-update
+    도구 사본 · 기록          %LOCALAPPDATA%\TouchlineNoir\tool, %LOCALAPPDATA%\TouchlineNoir\Logs\notify.log
+- 켜기: Update-TouchlineNoir.cmd -Notify On
+  끄기: Update-TouchlineNoir.cmd -Notify Off  (위 항목을 모두 지웁니다)
 
 옵션 (명령 프롬프트에서 Update-TouchlineNoir.cmd 뒤에 붙입니다)
   -CheckOnly      새 버전이 있는지 확인만 합니다.
@@ -28,6 +42,7 @@ TOUCHLINE NOIR SKIN UPDATER · Football Manager 27 · Windows Steam
   -Theme LIGHT    테마를 고르거나 바꿉니다. (CLASSIC 또는 LIGHT)
   -GamePath "D:\SteamLibrary\steamapps\common\Football Manager 27"
                   게임 폴더를 직접 알려 줍니다.
+  -Notify On      새 버전 알림을 켭니다.   -Notify Off  알림을 끕니다.
   예) Update-TouchlineNoir.cmd -Theme LIGHT
 
 알아 둘 점

@@ -30,6 +30,13 @@ Football Manager 27(Windows · Steam)용 비공식 스킨입니다. 어두운 **
 
 공개 키 지문 (모듈러스 SHA-256): `27809a0ba919ee91e830dad5300026965bd4f3850153b09bba80562ac19b722b`
 
+### 새 버전 알림 (선택)
+
+업데이트를 마쳤거나 "이미 최신"일 때 업데이트 도구가 한 번 물어봅니다. 켜 두면 로그인할 때와 3시간마다 업데이트 정보만 확인하고,
+새 버전이 있으면 Windows 알림을 띄웁니다(FM 실행 중에는 알리지 않음, 같은 버전은 사흘에 한 번). 알림을 누르면 업데이트 도구가 열립니다.
+이 Windows 사용자 계정에만 작업 스케줄러 작업(`TouchlineNoir Update Check`)과 알림 등록이 생기며,
+`Update-TouchlineNoir.cmd -Notify Off`로 모두 지울 수 있습니다.
+
 ## 지원
 
 - Football Manager 27 · Windows x64 · Steam 빌드 26620374

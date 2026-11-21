@@ -9,12 +9,15 @@
      이 컴퓨터(%LOCALAPPDATA%\TouchlineNoir\packages)에 다시 만듭니다. 받은 파일은 모두 SHA-256으로 확인합니다.
   3. FM27이 꺼진 뒤, 그 패키지의 설치 과정(2-Install.cmd와 같은 검사 · 원본 백업 · 확인)을 관리자 권한으로
      실행합니다. 게임 파일은 이 단계에서만, 스킨 설치 도구를 통해서만 바뀝니다.
+  4. 새 버전 알림(선택): 켜 두면 로그인할 때와 3시간마다 업데이트 정보만 확인해, 새 버전이 있으면
+     Windows 알림을 띄웁니다. FM이 실행 중일 때는 알리지 않습니다.
 
   사용: Update-TouchlineNoir.cmd 를 두 번 클릭합니다.
   옵션: -CheckOnly        확인만 하고 끝냅니다.
         -PrepareOnly      새 버전 패키지를 받아 두기만 하고 설치하지 않습니다.
         -Theme LIGHT      테마를 고르거나 바꿉니다 (CLASSIC 또는 LIGHT).
         -GamePath "폴더"  fm.exe가 있는 게임 폴더를 직접 알려 줍니다.
+        -Notify On        새 버전 알림을 켭니다.  -Notify Off  알림을 끄고 등록한 항목을 모두 지웁니다.
         -Yes              묻지 않고 진행합니다 (관리자 권한 확인 창은 그대로 뜹니다).
 #>
 [CmdletBinding()]
@@ -24,6 +27,8 @@ param(
     [switch]$CheckOnly,
     [switch]$PrepareOnly,
     [switch]$Yes,
+    [string]$Notify,
+    [switch]$NotifyCheck,
     [switch]$NoSelfUpdate,
     [string]$ManifestUrl,
     [string]$CacheRoot
@@ -33,13 +38,29 @@ Set-StrictMode -Version Latest
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
 
-$UpdaterVersion = 1
+$UpdaterVersion = 2
 $DefaultManifestUrl = 'https://github.com/touchline-noir/touchline-noir-skin/releases/latest/download/noir-update.json'
+$DefaultCacheRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'TouchlineNoir'
 $PublicKeyXml = '<RSAKeyValue><Modulus>3JmeuOogTBadgyGobMTHROideCa9DssUfDKTfSdhnyBk4JEL1+8P3uGltDvwVBNZJe2T5NuSFV3qo4QgZy8bOPMMees8d4dKO0Hh45yhNijGsGs2CGbgormGlv8AOe6E5DXHroSxTMYC4JG7K6A6CfHmHygf1pbx5e2rttv8g8UUeDTyTHFAmMjxECf3f6pIZJ4/NEDLJWcWXps+1k6n1BbQ3J2fuvnLlXbJMfOoc+3P95cBrx5cq/RM4IJyip/GwiAXvSpSm3cDu6zCFKOmtQ24bDRMnIMl1ZfVktTD9/OCBgkJ47CEbIzfre1lBEgm0B8mJ8eNCDUkBK9+rMP8M0AIWJtyYffnRYiXjwChxR4Tmp95Icgs+GwkLUf+i9uOe1IgZPWPEqOb0lBz+woeG1KEeuFxYBdL7uj7dJ4RDeHXDM9FnV/YBhi0k2gd3Zg0SRpy1LkTLKPA5uum7fa55/glPY28h0M10zlmO+Z214yO5BuZboKtI07eMbeibZZd</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 $BundleDirectory = 'fm_Data\StreamingAssets\aa\StandaloneWindows64'
 $CacheMarker = '.touchline-noir-cache'
 $PathPattern = '^[A-Za-z0-9][A-Za-z0-9 ._()+-]*(/[A-Za-z0-9][A-Za-z0-9 ._()+-]*)*$'
+$TaskName = 'TouchlineNoir Update Check'
+$AppId = 'TouchlineNoir.SkinUpdater'
+$ProtocolName = 'touchline-noir-update'
+$ReleasePage = 'https://github.com/touchline-noir/touchline-noir-skin/releases/latest'
+$RemindAfterHours = 72
+$LauncherText = (@(
+    '@echo off',
+    'setlocal',
+    'set "PSModulePath=%SystemRoot%\System32\WindowsPowerShell\v1.0\Modules;%PSModulePath%"',
+    '"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0Update-TouchlineNoir.ps1" %*',
+    'set "noir_result=%errorlevel%"',
+    'if not "%NOIR_NO_PAUSE%"=="1" pause',
+    'exit /b %noir_result%'
+) -join "`r`n") + "`r`n"
 $script:Transcript = $false
+$script:NotifyLog = $null
 
 function Say([string]$Text) { Write-Host $Text }
 function Note([string]$Text) { Write-Host $Text -ForegroundColor DarkGray }
@@ -86,6 +107,13 @@ function Format-Size([long]$Bytes) {
     if ($Bytes -ge 1MB) { return ('{0:N1} MB' -f ($Bytes / 1MB)) }
     if ($Bytes -ge 1KB) { return ('{0:N0} KB' -f ($Bytes / 1KB)) }
     return ('{0} B' -f $Bytes)
+}
+function Format-PackageVersion([string]$Text) {
+    if ($Text -cmatch '^([0-9]+\.[0-9]+\.[0-9]+)((?:-[a-z0-9.]+)*?)-(classic|light)-windows$') {
+        return ('V' + $Matches[1] + $Matches[2] + ' ' + $Matches[3].ToUpperInvariant())
+    }
+    if ($Text) { return $Text }
+    return '알 수 없음'
 }
 function Get-BytesSha256([byte[]]$Bytes) {
     $sha = [Security.Cryptography.SHA256]::Create()
@@ -226,36 +254,205 @@ function Read-Answer([string]$Prompt) {
     return ([string](Read-Host $Prompt)).Trim()
 }
 
+# ---- New-version notification (opt-in; everything lives in this Windows user account) ----
+function Write-NotifyLog([string]$Text) {
+    if (-not $script:NotifyLog) { return }
+    try { [IO.File]::AppendAllText($script:NotifyLog, ([DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss') + '  ' + $Text + "`r`n"), (New-Object Text.UTF8Encoding($false))) } catch { }
+}
+function Limit-NotifyLog {
+    try {
+        if ((Test-Path -LiteralPath $script:NotifyLog -PathType Leaf) -and (Get-Item -LiteralPath $script:NotifyLog).Length -gt 262144) {
+            $keep = @([IO.File]::ReadAllLines($script:NotifyLog, [Text.Encoding]::UTF8) | Select-Object -Last 400)
+            [IO.File]::WriteAllLines($script:NotifyLog, [string[]]$keep, (New-Object Text.UTF8Encoding($false)))
+        }
+    } catch { }
+}
+function Get-NotifyStatePath { return (Join-Path $CacheRoot 'notify.json') }
+function Read-NotifyState {
+    $path = Get-NotifyStatePath
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        try { $state = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8) | ConvertFrom-Json; if ($null -ne $state) { return $state } } catch { }
+    }
+    return (New-Object psobject)
+}
+function Set-StateValue($State, [string]$Name, $Value) { $State | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force }
+function Save-NotifyState($State) {
+    $path = Get-NotifyStatePath
+    $temporary = $path + '.tmp'
+    [IO.File]::WriteAllText($temporary, ($State | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+    [IO.File]::Move($temporary, $path)
+}
+function Get-ScriptVersion([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return 0 }
+    $match = [regex]::Match([IO.File]::ReadAllText($Path), '(?m)^\$UpdaterVersion = ([0-9]+)')
+    if ($match.Success) { return [int]$match.Groups[1].Value }
+    return 0
+}
+function Sync-NotifyTool {
+    # A stable copy that the scheduled check and the notification click use (the extracted folder may be moved or deleted).
+    $tool = Join-Path $CacheRoot 'tool'
+    Ensure-Directory $tool
+    $toolScript = Join-Path $tool 'Update-TouchlineNoir.ps1'
+    $self = [IO.Path]::GetFullPath($PSCommandPath)
+    if (-not $self.Equals([IO.Path]::GetFullPath($toolScript), [StringComparison]::OrdinalIgnoreCase)) {
+        if ((Get-ScriptVersion $toolScript) -le $UpdaterVersion) { Copy-Item -LiteralPath $self -Destination $toolScript -Force }
+        $readme = Join-Path (Split-Path -Parent $self) 'README-UPDATER-KO.txt'
+        if (Test-Path -LiteralPath $readme -PathType Leaf) { Copy-Item -LiteralPath $readme -Destination (Join-Path $tool 'README-UPDATER-KO.txt') -Force }
+    }
+    $launcher = Join-Path $tool 'Update-TouchlineNoir.cmd'
+    $wanted = [Text.Encoding]::ASCII.GetBytes($LauncherText)
+    $current = $(if (Test-Path -LiteralPath $launcher -PathType Leaf) { [IO.File]::ReadAllBytes($launcher) } else { [byte[]]@() })
+    if (($current -join ',') -cne ($wanted -join ',')) { [IO.File]::WriteAllBytes($launcher, $wanted) }
+    return $tool
+}
+function Initialize-Toast {
+    [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+}
+function Show-NoirToast([string]$Title, [string]$Body1, [string]$Body2, [string]$Launch, [bool]$Silent) {
+    Initialize-Toast
+    $escape = [Security.SecurityElement]
+    $xml = '<toast activationType="protocol" launch="' + $escape::Escape($Launch) + '" duration="long"><visual><binding template="ToastGeneric">' +
+        '<text>' + $escape::Escape($Title) + '</text><text>' + $escape::Escape($Body1) + '</text><text>' + $escape::Escape($Body2) + '</text>' +
+        '</binding></visual><actions>' +
+        '<action content="업데이트 도구 열기" activationType="protocol" arguments="' + $ProtocolName + ':open"/>' +
+        '<action content="바뀐 점 보기" activationType="protocol" arguments="' + $ReleasePage + '"/>' +
+        '</actions></toast>'
+    $document = New-Object Windows.Data.Xml.Dom.XmlDocument
+    $document.LoadXml($xml)
+    $toast = New-Object Windows.UI.Notifications.ToastNotification $document
+    $toast.Tag = 'update'
+    $toast.Group = 'touchline-noir'
+    if ($Silent) { $toast.SuppressPopup = $true }
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($AppId).Show($toast)
+}
+function Enable-Notify([string]$Game, [string]$ThemeName) {
+    $tool = Sync-NotifyTool
+    $toolScript = Join-Path $tool 'Update-TouchlineNoir.ps1'
+    $toolLauncher = Join-Path $tool 'Update-TouchlineNoir.cmd'
+    $extra = ''
+    if (-not $CacheRoot.Equals($DefaultCacheRoot, [StringComparison]::OrdinalIgnoreCase)) { $extra += ' -CacheRoot "' + $CacheRoot + '"' }
+    if ($ManifestUrl -cne $DefaultManifestUrl) { $extra += ' -ManifestUrl "' + $ManifestUrl + '"' }
+    # Name shown on the notification, and the click target (opens the updater in a console window).
+    $appKey = 'HKCU:\Software\Classes\AppUserModelId\' + $AppId
+    if (-not (Test-Path -LiteralPath $appKey)) { [void](New-Item -Path $appKey -Force) }
+    [void](New-ItemProperty -LiteralPath $appKey -Name 'DisplayName' -Value '터치라인 누아르 스킨' -PropertyType String -Force)
+    $protocolKey = 'HKCU:\Software\Classes\' + $ProtocolName
+    $commandKey = $protocolKey + '\shell\open\command'
+    if (-not (Test-Path -LiteralPath $commandKey)) { [void](New-Item -Path $commandKey -Force) }
+    Set-Item -LiteralPath $protocolKey -Value 'URL:Touchline Noir Update'
+    [void](New-ItemProperty -LiteralPath $protocolKey -Name 'URL Protocol' -Value '' -PropertyType String -Force)
+    Set-Item -LiteralPath $commandKey -Value ('"' + (Join-Path $env:SystemRoot 'System32\cmd.exe') + '" /c ""' + $toolLauncher + '"' + $extra + '"')
+    # Per-user check at logon (+3 min) and every 3 hours, in a console without a window.
+    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = '--headless "' + $powershell + '" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $toolScript + '" -NotifyCheck' + $extra
+    $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\conhost.exe') -Argument $arguments -WorkingDirectory $tool
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $logon = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $logon.Delay = 'PT3M'
+    $repeat = New-ScheduledTaskTrigger -Once -At ([DateTime]::Now.AddMinutes(30)) -RepetitionInterval (New-TimeSpan -Hours 3)
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    [void](Register-ScheduledTask -TaskName $TaskName -TaskPath '\' -Action $action -Trigger @($logon, $repeat) -Settings $settings -Principal $principal -Description '터치라인 누아르 스킨 새 버전 알림. 끄기: Update-TouchlineNoir.cmd -Notify Off' -Force)
+    $state = Read-NotifyState
+    Set-StateValue $state 'enabled' $true
+    Set-StateValue $state 'declined' $false
+    Set-StateValue $state 'game_path' $Game
+    Set-StateValue $state 'theme' $ThemeName
+    Set-StateValue $state 'enabled_at' ([DateTime]::UtcNow.ToString('o'))
+    Save-NotifyState $state
+    Good '새 버전 알림을 켰습니다. 로그인할 때와 3시간마다 확인하고, FM을 하는 동안에는 알리지 않습니다.'
+    Note ('  끄려면: Update-TouchlineNoir.cmd -Notify Off   (작업 스케줄러 항목: ' + $TaskName + ')')
+}
+function Disable-Notify {
+    try { Unregister-ScheduledTask -TaskName $TaskName -TaskPath '\' -Confirm:$false -ErrorAction Stop } catch { }
+    foreach ($key in @(('HKCU:\Software\Classes\' + $ProtocolName), ('HKCU:\Software\Classes\AppUserModelId\' + $AppId))) {
+        if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
+    }
+    try { Initialize-Toast; [Windows.UI.Notifications.ToastNotificationManager]::History.Clear($AppId) } catch { }
+    $state = Read-NotifyState
+    Set-StateValue $state 'enabled' $false
+    Save-NotifyState $state
+    $tool = [IO.Path]::GetFullPath((Join-Path $CacheRoot 'tool'))
+    $self = [IO.Path]::GetFullPath($PSCommandPath)
+    if ((Test-Path -LiteralPath $tool) -and -not $self.StartsWith($tool + '\', [StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath $tool -Recurse -Force }
+    Good '새 버전 알림을 껐습니다. 작업 스케줄러 항목과 알림 등록을 지웠습니다.'
+}
+function Invoke-NotifyOffer([string]$Game, [string]$ThemeName) {
+    if ($Yes -or $CheckOnly -or $PrepareOnly -or $NotifyCheck) { return }
+    try {
+        $state = Read-NotifyState
+        if ((Get-Prop $state 'enabled') -eq $true) {
+            [void](Sync-NotifyTool)
+            Set-StateValue $state 'game_path' $Game
+            Set-StateValue $state 'theme' $ThemeName
+            Save-NotifyState $state
+            return
+        }
+        if ((Get-Prop $state 'declined') -eq $true) { return }
+        Say ''
+        Say '새 버전이 나오면 Windows 알림으로 알려 드릴까요?'
+        Note '  로그인할 때와 3시간마다 업데이트 정보만 확인합니다. FM을 하는 동안에는 알리지 않습니다.'
+        Note '  나중에 바꾸려면: Update-TouchlineNoir.cmd -Notify On  또는  -Notify Off'
+        $answer = ([string](Read-Host '알림 켜기 (Y/N)')).Trim()
+        if ($answer -match '^(y|yes|ㅛ|예|네)$') { Enable-Notify $Game $ThemeName }
+        else {
+            Set-StateValue $state 'declined' $true
+            Save-NotifyState $state
+            Say '알림을 켜지 않았습니다.'
+        }
+    } catch { Warn ('알림을 설정하지 못했습니다: ' + (Get-ErrorText $_)) }
+}
+
 try {
     if (-not ($PSVersionTable.PSVersion.Major -eq 5 -and $PSVersionTable.PSEdition -ceq 'Desktop')) {
         throw 'Windows PowerShell 5.1에서 실행해 주세요. Update-TouchlineNoir.cmd를 두 번 클릭하면 됩니다.'
     }
     if (-not [Environment]::Is64BitProcess) { throw '64비트 Windows PowerShell에서 실행해 주세요. Update-TouchlineNoir.cmd를 두 번 클릭하면 됩니다.' }
-    if (-not $CacheRoot) { $CacheRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'TouchlineNoir' }
+    if ($Notify -and $Notify -notmatch '^(on|off)$') { throw '-Notify 뒤에는 On 또는 Off 를 써 주세요.' }
+    if (-not $CacheRoot) { $CacheRoot = $DefaultCacheRoot }
     $CacheRoot = [IO.Path]::GetFullPath($CacheRoot)
     Ensure-Directory $CacheRoot
-    try {
+    if (-not $ManifestUrl) { $ManifestUrl = $DefaultManifestUrl }
+    if ($Notify -ieq 'off') { Disable-Notify; Stop-Updater 0 }
+    $notifyState = Read-NotifyState
+    $silentToast = (Get-Prop $notifyState 'silent_toast') -eq $true
+    if ($NotifyCheck) {
         $logs = Join-Path $CacheRoot 'Logs'
         Ensure-Directory $logs
-        Start-Transcript -LiteralPath (Join-Path $logs ('update-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss') + '.log')) | Out-Null
-        $script:Transcript = $true
-    } catch { }
+        $script:NotifyLog = Join-Path $logs 'notify.log'
+        Limit-NotifyLog
+        if ((Get-Prop $notifyState 'enabled') -ne $true) { Write-NotifyLog '알림이 꺼져 있어 확인하지 않음'; Stop-Updater 0 }
+        if ((Test-FmRunning) -and (Get-Prop $notifyState 'notify_while_fm_running') -ne $true) { Write-NotifyLog 'FM 실행 중: 다음 확인 때 다시 봄'; Stop-Updater 0 }
+        Write-NotifyLog ('확인 시작 (업데이트 도구 v' + $UpdaterVersion + ')')
+    } else {
+        try {
+            $logs = Join-Path $CacheRoot 'Logs'
+            Ensure-Directory $logs
+            Start-Transcript -LiteralPath (Join-Path $logs ('update-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss') + '.log')) | Out-Null
+            $script:Transcript = $true
+        } catch { }
+    }
+    $interactive = -not ($Yes -or $NotifyCheck)
 
     Say ''
     Say ('터치라인 누아르 스킨 업데이트 도구 v' + $UpdaterVersion)
     Say '────────────────────────────────────────'
-    if (-not $ManifestUrl) { $ManifestUrl = $DefaultManifestUrl }
     $client = New-HttpClient
     Say '최신 버전 정보를 확인하는 중...'
-    try {
-        $manifestBytes = Get-SmallDownload $client $ManifestUrl 4MB
-        $signatureBytes = Get-SmallDownload $client ($ManifestUrl + '.sig') 64KB
-    } catch {
-        throw ('업데이트 정보를 받지 못했습니다. 인터넷 연결을 확인해 주세요. (' + (Get-ErrorText $_) + ')')
+    $verified = $false
+    for ($attempt = 1; $attempt -le 2 -and -not $verified; $attempt++) {
+        try {
+            $manifestBytes = Get-SmallDownload $client $ManifestUrl 4MB
+            $signatureBytes = Get-SmallDownload $client ($ManifestUrl + '.sig') 64KB
+        } catch {
+            throw ('업데이트 정보를 받지 못했습니다. 인터넷 연결을 확인해 주세요. (' + (Get-ErrorText $_) + ')')
+        }
+        $verified = Test-ManifestSignature $manifestBytes ([Text.Encoding]::ASCII.GetString($signatureBytes))
+        if (-not $verified -and $attempt -eq 1) { Start-Sleep -Seconds 3 }
     }
-    if (-not (Test-ManifestSignature $manifestBytes ([Text.Encoding]::ASCII.GetString($signatureBytes)))) {
-        throw '업데이트 정보의 서명이 맞지 않습니다. 아무 파일도 받지 않고 멈춥니다.'
-    }
+    if (-not $verified) { throw '업데이트 정보의 서명이 맞지 않습니다. 아무 파일도 받지 않고 멈춥니다.' }
     $manifestText = (New-Object Text.UTF8Encoding($false, $true)).GetString($manifestBytes).TrimStart([char]0xFEFF)
     $manifest = $manifestText | ConvertFrom-Json
     if ((Get-Prop $manifest 'schema') -ne 1 -or (Get-Prop $manifest 'product') -cne 'touchline-noir-skin') {
@@ -263,6 +460,7 @@ try {
     }
     $latestVersion = Get-Text $manifest 'version' '^[0-9]+\.[0-9]+\.[0-9]+$'
     $latestDisplay = Get-Text $manifest 'display_version' '^V[0-9][0-9A-Za-z .-]*$'
+    $manifestSha = Get-BytesSha256 $manifestBytes
     Good ('서명 확인 완료 · 공개 최신 버전: ' + $latestDisplay)
 
     # The updater replaces only its own script (never the running .cmd launcher), then restarts once.
@@ -271,6 +469,7 @@ try {
     $minUpdater = 0; [void][int]::TryParse([string](Get-Prop $manifest 'min_updater_version'), [ref]$minUpdater)
     if (-not $NoSelfUpdate -and $newUpdater -gt $UpdaterVersion) {
         Say ('업데이트 도구 새 버전(v' + $newUpdater + ')을 먼저 받습니다.')
+        Write-NotifyLog ('업데이트 도구 v' + $newUpdater + '로 바꿈')
         $selfDirectory = Split-Path -Parent $PSCommandPath
         $staging = Join-Path $CacheRoot 'updater'
         Ensure-Directory $staging
@@ -311,23 +510,28 @@ try {
     if ((Get-BytesSha256 $finderBytes) -cne $finder.Sha256) { throw '게임 찾기 도구의 확인 값이 다릅니다.' }
     . ([ScriptBlock]::Create((New-Object Text.UTF8Encoding($false)).GetString($finderBytes).TrimStart([char]0xFEFF)))
 
+    if ($NotifyCheck -and -not $GamePath) {
+        $savedGame = [string](Get-Prop $notifyState 'game_path')
+        if ($savedGame -and (Test-Path -LiteralPath (Join-Path $savedGame 'fm.exe') -PathType Leaf)) { $GamePath = $savedGame }
+    }
     if ($GamePath) {
-        $found = @(Get-Fm27Installations -GamePath $GamePath | Where-Object { $_.Source -ceq 'Explicit' })
+        # Same explicit-path check as the installer (Resolve-GameSelection), without scanning every other install location.
+        $found = @(Get-Fm27RootCandidates $GamePath.Trim().Trim('"') 'Explicit')
         if ($found.Count -ne 1) { throw '알려 준 경로에서 FM27을 찾지 못했습니다. fm.exe가 있는 폴더를 알려 주세요.' }
         $game = [string]$found[0].Path
     } else {
         $found = @(Get-Fm27Installations)
         if ($found.Count -eq 1) { $game = [string]$found[0].Path }
         elseif ($found.Count -eq 0) {
-            if ($Yes) { throw 'FM27 설치 폴더를 찾지 못했습니다. -GamePath로 fm.exe가 있는 폴더를 알려 주세요.' }
+            if (-not $interactive) { throw 'FM27 설치 폴더를 찾지 못했습니다. -GamePath로 fm.exe가 있는 폴더를 알려 주세요.' }
             $answer = ([string](Read-Host 'FM27 설치 폴더(fm.exe가 있는 폴더)를 입력하세요')).Trim().Trim('"')
-            $found = @(Get-Fm27Installations -GamePath $answer | Where-Object { $_.Source -ceq 'Explicit' })
+            $found = @(Get-Fm27RootCandidates $answer 'Explicit')
             if ($found.Count -ne 1) { throw '입력한 경로에서 FM27을 찾지 못했습니다.' }
             $game = [string]$found[0].Path
         } else {
             Say 'FM27 설치가 여러 개 있습니다:'
             for ($i = 0; $i -lt $found.Count; $i++) { Say ('  {0}) {1}  [{2}]' -f ($i + 1), $found[$i].Path, $found[$i].Source) }
-            if ($Yes) { throw '여러 설치 중 하나를 -GamePath로 골라 주세요.' }
+            if (-not $interactive) { throw '여러 설치 중 하나를 -GamePath로 골라 주세요.' }
             $pick = 0
             if (-not [int]::TryParse(([string](Read-Host '번호를 고르세요')).Trim(), [ref]$pick) -or $pick -lt 1 -or $pick -gt $found.Count) { throw '잘못된 번호입니다.' }
             $game = [string]$found[$pick - 1].Path
@@ -354,6 +558,16 @@ try {
         if ($match) { $build = $candidate; break }
     }
     if ($null -eq $build) {
+        if ($NotifyCheck) {
+            $buildMark = Get-BytesSha256 ([Text.Encoding]::ASCII.GetBytes((Get-FileSha256 (Join-Path $game 'fm.exe')) + (Get-FileSha256 (Join-Path $game 'GameAssembly.dll'))))
+            if ((Get-Prop $notifyState 'notified_build') -cne $buildMark) {
+                Show-NoirToast 'FM27 게임 빌드가 바뀌었습니다' '설치된 스킨이 지원하는 빌드와 다릅니다.' '이 빌드용 스킨이 나오면 다시 알려 드립니다.' $ReleasePage $silentToast
+                Set-StateValue $notifyState 'notified_build' $buildMark
+                Save-NotifyState $notifyState
+                Write-NotifyLog '지원하지 않는 게임 빌드: 한 번 알림'
+            } else { Write-NotifyLog '지원하지 않는 게임 빌드 (이미 알림)' }
+            Stop-Updater 0
+        }
         $supported = (@(Get-Prop $manifest 'builds') | ForEach-Object { 'Steam ' + (Get-Prop $_ 'game_build') }) -join ', '
         Warn ('이 FM27 빌드는 아직 지원하지 않습니다. 지원 빌드: ' + $supported)
         Warn 'FM27이 업데이트되었다면 그 빌드에 맞춘 스킨이 나올 때까지 기다려 주세요. 게임 파일은 바꾸지 않았습니다.'
@@ -373,23 +587,29 @@ try {
     $receiptTheme = ''
     if ($receiptVersion -cmatch '-(classic|light)-windows$') { $receiptTheme = $Matches[1].ToUpperInvariant() }
     if ($receiptAction -ceq 'Restore') { Say '설치 기록: 스킨을 되돌린 상태(원래 FM 화면)' }
-    elseif ($receiptVersion) { Say ('설치 기록: ' + ($receiptVersion -replace '-windows$', '')) }
+    elseif ($receiptVersion) { Say ('설치 기록: ' + (Format-PackageVersion $receiptVersion)) }
     else { Say '설치 기록: 없음' }
 
     $themes = @((Get-Prop $build 'themes').PSObject.Properties | ForEach-Object { $_.Name })
-    if ($Theme) {
+    if ($NotifyCheck) {
+        if ($receiptAction -ceq 'Restore') { Write-NotifyLog '스킨을 되돌린 상태: 알리지 않음'; Stop-Updater 0 }
+        $chosen = $receiptTheme
+        if (-not $chosen) { $chosen = [string](Get-Prop $notifyState 'theme') }
+        if ($chosen -cnotin $themes) { Write-NotifyLog '테마를 알 수 없음: 알리지 않음'; Stop-Updater 0 }
+    } elseif ($Theme) {
         $chosen = $Theme.Trim().ToUpperInvariant()
         if ($chosen -cnotin $themes) { throw ('테마는 ' + ($themes -join ' 또는 ') + ' 중에서 골라 주세요.') }
     } elseif ($receiptTheme -and $receiptAction -cne 'Restore' -and $receiptTheme -cin $themes) {
         $chosen = $receiptTheme
     } else {
-        if ($Yes) { throw '설치된 테마를 알 수 없습니다. -Theme CLASSIC 또는 -Theme LIGHT로 골라 주세요.' }
+        if (-not $interactive) { throw '설치된 테마를 알 수 없습니다. -Theme CLASSIC 또는 -Theme LIGHT로 골라 주세요.' }
         Say '설치할 테마를 고르세요:'
         for ($i = 0; $i -lt $themes.Count; $i++) { Say ('  {0}) {1}' -f ($i + 1), $themes[$i]) }
         $pick = 0
         if (-not [int]::TryParse(([string](Read-Host '번호')).Trim(), [ref]$pick) -or $pick -lt 1 -or $pick -gt $themes.Count) { throw '잘못된 번호입니다.' }
         $chosen = $themes[$pick - 1]
     }
+    if ($Notify -ieq 'on') { Enable-Notify $game $chosen; Stop-Updater 0 }
     $package = Get-Prop (Get-Prop $build 'themes') $chosen
     $packageVersion = Get-Text $package 'package_version' '^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)*-(classic|light)-windows$'
     $packageDisplay = Get-Text $package 'display_name' '^V[0-9][0-9A-Za-z .-]*$'
@@ -397,7 +617,13 @@ try {
     $installedCore = Get-CoreVersion $receiptVersion
     $latestCore = Get-CoreVersion $latestVersion
     if (-not $Theme -and $null -ne $installedCore -and $installedCore -gt $latestCore -and $receiptAction -cne 'Restore') {
-        Good ('설치된 스킨(' + ($receiptVersion -replace '-windows$', '') + ')이 공개 최신 버전보다 새 버전입니다. 그대로 둡니다.')
+        if ($NotifyCheck) { Write-NotifyLog '설치된 스킨이 공개 최신보다 새 버전: 알리지 않음'; Stop-Updater 0 }
+        Good ('설치된 스킨(' + (Format-PackageVersion $receiptVersion) + ')이 공개 최신 버전보다 새 버전입니다. 그대로 둡니다.')
+        Stop-Updater 0
+    }
+    $receiptStamp = $receiptVersion + '|' + [string](Get-Prop $receipt 'TimestampUtc') + '|' + $chosen
+    if ($NotifyCheck -and (Get-Prop $notifyState 'ok_manifest') -ceq $manifestSha -and (Get-Prop $notifyState 'ok_receipt') -ceq $receiptStamp) {
+        Write-NotifyLog ('최신 상태 그대로: ' + $packageDisplay)
         Stop-Updater 0
     }
 
@@ -438,8 +664,33 @@ try {
     if ($bundles.Count -lt 1) { throw 'package.json에 스킨 파일 목록이 없습니다.' }
     $changing = @($bundles | Where-Object { $_.State -cne 'current' })
     $unknown = @($bundles | Where-Object { $_.State -ceq 'unknown' })
+
+    if ($NotifyCheck) {
+        if ($changing.Count -eq 0) {
+            Set-StateValue $notifyState 'ok_manifest' $manifestSha
+            Set-StateValue $notifyState 'ok_receipt' $receiptStamp
+            Save-NotifyState $notifyState
+            Write-NotifyLog ('최신: ' + $packageDisplay)
+            Stop-Updater 0
+        }
+        $lastVersion = [string](Get-Prop $notifyState 'notified_version')
+        $lastAt = [string](Get-Prop $notifyState 'notified_at')
+        $recent = $false
+        if ($lastVersion -ceq $packageVersion -and $lastAt) {
+            try { $recent = ([DateTime]::UtcNow - [DateTime]::Parse($lastAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)).TotalHours -lt $RemindAfterHours } catch { $recent = $false }
+        }
+        if ($recent) { Write-NotifyLog ('새 버전 있음(' + $packageDisplay + '), 최근에 이미 알림'); Stop-Updater 0 }
+        Show-NoirToast ('새 버전이 나왔습니다: ' + $packageDisplay) ('지금 설치된 버전: ' + (Format-PackageVersion $receiptVersion) + ' · 바뀌는 스킨 파일 ' + $changing.Count + '개') '눌러서 업데이트 도구를 엽니다. 설치는 FM을 끈 뒤 진행됩니다.' ($ProtocolName + ':open') $silentToast
+        Set-StateValue $notifyState 'notified_version' $packageVersion
+        Set-StateValue $notifyState 'notified_at' ([DateTime]::UtcNow.ToString('o'))
+        Save-NotifyState $notifyState
+        Write-NotifyLog ('새 버전 알림: ' + $packageDisplay + ' (바뀌는 파일 ' + $changing.Count + '개)')
+        Stop-Updater 0
+    }
+
     if ($changing.Count -eq 0) {
         Good ('이미 최신입니다: ' + $packageDisplay + ' (스킨 파일 ' + $bundles.Count + '개가 모두 같습니다)')
+        Invoke-NotifyOffer $game $chosen
         Stop-Updater 0
     }
     if ($unknown.Count -gt 0) {
@@ -531,9 +782,12 @@ try {
             try { Remove-Item -LiteralPath $old.FullName -Recurse -Force } catch { }
         }
     }
+    Invoke-NotifyOffer $game $chosen
     Stop-Updater 0
 } catch {
+    $message = Get-ErrorText $_
+    Write-NotifyLog ('오류: ' + $message)
     Write-Host ''
-    Write-Host ('오류: ' + (Get-ErrorText $_)) -ForegroundColor Red
+    Write-Host ('오류: ' + $message) -ForegroundColor Red
     Stop-Updater 1
 }
