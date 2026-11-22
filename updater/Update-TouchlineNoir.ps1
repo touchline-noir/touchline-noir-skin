@@ -40,7 +40,7 @@ Set-StrictMode -Version Latest
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
 
-$UpdaterVersion = 3
+$UpdaterVersion = 4
 $DefaultManifestUrl = 'https://github.com/touchline-noir/touchline-noir-skin/releases/latest/download/noir-update.json'
 $DefaultCacheRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'TouchlineNoir'
 # BEGIN TRUSTED KEYS (key id = first 16 hex digits of SHA-256 of the RSA modulus)
@@ -799,9 +799,15 @@ try {
         Good ('설치된 스킨(' + (Format-PackageVersion $receiptVersion) + ')이 공개 최신 버전보다 새 버전입니다. 그대로 둡니다.')
         Stop-Updater 0
     }
+    # A newer package whose skin files are all installed already (installer or documents only, e.g. V5.0.2 over V5.0.1) is
+    # still an update: its installer runs once and the receipt then names the new version.
+    $packageCore = Get-CoreVersion $packageVersion
+    $toolsOnly = ($changing.Count -eq 0 -and $receiptAction -ceq 'Install' -and $receiptTheme -ceq $chosen -and $null -ne $installedCore -and
+        $null -ne $packageCore -and $installedCore -lt $packageCore)
+    $changeText = $(if ($toolsOnly) { '스킨 화면 파일은 그대로 · 설치 도구 업데이트' } else { '바뀌는 스킨 파일 ' + $changing.Count + '개' })
 
     if ($NotifyCheck) {
-        if ($changing.Count -eq 0) {
+        if ($changing.Count -eq 0 -and -not $toolsOnly) {
             Set-StateValue $notifyState 'ok_manifest' $manifestSha
             Set-StateValue $notifyState 'ok_receipt' $receiptStamp
             Save-NotifyState $notifyState
@@ -815,15 +821,15 @@ try {
             try { $recent = ([DateTime]::UtcNow - [DateTime]::Parse($lastAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)).TotalHours -lt $RemindAfterHours } catch { $recent = $false }
         }
         if ($recent) { Write-NotifyLog ('새 버전 있음(' + $packageDisplay + '), 최근에 이미 알림'); Stop-Updater 0 }
-        Show-NoirToast ('새 버전이 나왔습니다: ' + $packageDisplay) ('지금 설치된 버전: ' + (Format-PackageVersion $receiptVersion) + ' · 바뀌는 스킨 파일 ' + $changing.Count + '개') '눌러서 업데이트 도구를 엽니다. 설치는 FM을 끈 뒤 진행됩니다.' ($ProtocolName + ':open') $silentToast
+        Show-NoirToast ('새 버전이 나왔습니다: ' + $packageDisplay) ('지금 설치된 버전: ' + (Format-PackageVersion $receiptVersion) + ' · ' + $changeText) '눌러서 업데이트 도구를 엽니다. 설치는 FM을 끈 뒤 진행됩니다.' ($ProtocolName + ':open') $silentToast
         Set-StateValue $notifyState 'notified_version' $packageVersion
         Set-StateValue $notifyState 'notified_at' ([DateTime]::UtcNow.ToString('o'))
         Save-NotifyState $notifyState
-        Write-NotifyLog ('새 버전 알림: ' + $packageDisplay + ' (바뀌는 파일 ' + $changing.Count + '개)')
+        Write-NotifyLog ('새 버전 알림: ' + $packageDisplay + ' (' + $changeText + ')')
         Stop-Updater 0
     }
 
-    if ($changing.Count -eq 0) {
+    if ($changing.Count -eq 0 -and -not $toolsOnly) {
         Good ('이미 최신입니다: ' + $packageDisplay + ' (스킨 파일 ' + $bundles.Count + '개가 모두 같습니다)')
         Invoke-NotifyOffer $game $chosen
         Stop-Updater 0
@@ -853,6 +859,7 @@ try {
     Say ''
     Say ('새 버전: ' + $packageDisplay)
     Say ('바뀌는 스킨 파일: ' + $changing.Count + '개 / ' + $bundles.Count + '개')
+    if ($toolsOnly) { Say '스킨 화면 파일은 그대로이고, 설치 도구와 안내 문서가 바뀌었습니다.' }
     Say ('내려받을 크기: ' + (Format-Size $downloadBytes) + ' (파일 ' + $downloads.Count + '개)')
     $notes = @(Get-Prop $manifest 'notes_ko')
     if ($notes.Count -gt 0) {
@@ -912,6 +919,11 @@ try {
 
     $left = @($bundles | Where-Object { (Get-FileSha256 $_.Target) -cne $_.Installed })
     if ($left.Count -gt 0) { throw ('설치 후 확인에서 다른 파일이 있습니다: ' + (($left | ForEach-Object { $_.Name }) -join ', ')) }
+    $after = $null
+    try { $after = [IO.File]::ReadAllText($receiptPath, [Text.Encoding]::UTF8) | ConvertFrom-Json } catch { $after = $null }
+    if ([string](Get-Prop $after 'Version') -cne $packageVersion -or [string](Get-Prop $after 'Action') -cne 'Install') {
+        throw '설치 후 확인에서 설치 기록이 새 버전을 가리키지 않습니다. 설치 창의 메시지를 확인해 주세요.'
+    }
     Say ''
     Good ('업데이트 완료: ' + $packageDisplay)
     Say ('이 버전의 설치 도구 폴더(되돌리기 3-Restore.cmd 포함): ' + $packageRoot)

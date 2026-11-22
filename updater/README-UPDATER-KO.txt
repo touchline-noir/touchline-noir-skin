@@ -11,6 +11,7 @@ TOUCHLINE NOIR SKIN UPDATER · Football Manager 27 · Windows Steam
 4. FM27이 켜져 있으면 게임을 끌 때까지 기다렸다가 계속합니다. (그만두려면 Ctrl+C)
 5. 관리자 권한 확인 창(UAC)에서 "예"를 누르면 설치 창이 열리고, 끝나면 "업데이트 완료"가 나옵니다.
 이미 최신이면 "이미 최신입니다"라고 알려 주고 아무것도 바꾸지 않습니다.
+스킨 화면 파일은 그대로이고 설치 도구 · 문서만 바뀐 새 버전도 설치합니다(내려받는 양이 아주 적습니다).
 
 하는 일
 - GitHub(touchline-noir/touchline-noir-skin) 최신 릴리스의 업데이트 정보와 서명을 받아,
@@ -50,7 +51,7 @@ TOUCHLINE NOIR SKIN UPDATER · Football Manager 27 · Windows Steam
 - 공식 배포처는 GitHub의 touchline-noir/touchline-noir-skin 릴리스뿐입니다. 다른 곳에 올라온 스킨 · 업데이트 파일은
   실행하지 마세요. 스킨 설치 과정은 관리자 권한으로 실행됩니다.
 - 서명 공개 키 지문(SHA-256, 모듈러스): d1472c957cdab4de3380982478e743dab8e1974219437087f20d8a2c9a85ba68
-  (2026-11-22에 키를 바꿨습니다. v1 · v2 업데이트 도구는 실행할 때 저절로 v3로 바뀝니다.)
+  (2026-11-22에 키를 바꿨습니다. 예전 업데이트 도구는 실행할 때 저절로 최신 업데이트 도구로 바뀝니다.)
 - 실행 기록(%LOCALAPPDATA%\TouchlineNoir\Logs)에는 Windows 사용자 이름, PC 이름, 폴더 경로가 들어 있습니다.
   다른 사람에게 보내기 전에 확인하세요.
 
