@@ -12,6 +12,8 @@
      게임 파일은 이 단계에서만, 스킨 설치 도구를 통해서만 바뀝니다.
   4. 새 버전 알림(선택): 켜 두면 로그인할 때와 3시간마다 업데이트 정보만 확인해, 새 버전이 있으면
      Windows 알림을 띄웁니다. FM이 실행 중일 때는 알리지 않습니다.
+  5. 게임 안 알림(선택, BepInEx 플러그인): 게임 안 카드의 '업데이트하기'로 열리면 묻지 않고 새 버전을
+     미리 받아 두고, FM이 꺼지면 바로(0.25초 안) 설치를 시작합니다. 진행 상황은 게임 안 카드에 보입니다.
 
   사용: Update-TouchlineNoir.cmd 를 두 번 클릭합니다.
   옵션: -CheckOnly        확인만 하고 끝냅니다.
@@ -40,7 +42,7 @@ Set-StrictMode -Version Latest
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
 
-$UpdaterVersion = 4
+$UpdaterVersion = 5
 $DefaultManifestUrl = 'https://github.com/touchline-noir/touchline-noir-skin/releases/latest/download/noir-update.json'
 $DefaultCacheRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'TouchlineNoir'
 # BEGIN TRUSTED KEYS (key id = first 16 hex digits of SHA-256 of the RSA modulus)
@@ -73,6 +75,17 @@ $LauncherText = (@(
 ) -join "`r`n") + "`r`n"
 $script:Transcript = $false
 $script:NotifyLog = $null
+$script:NoPause = $false
+$script:InGame = $null
+$script:InGameVersion = ''
+$script:SingleInstance = $null
+$script:WindowShown = $false
+$script:ProgressTotal = 0L
+$script:ProgressBase = 0L
+$script:ProgressShown = [DateTime]::MinValue
+$script:ProgressFiles = 0
+$script:ProgressFileTotal = 0
+$script:AutoClose = $false
 
 function Say([string]$Text) { Write-Host $Text }
 function Note([string]$Text) { Write-Host $Text -ForegroundColor DarkGray }
@@ -80,8 +93,12 @@ function Good([string]$Text) { Write-Host $Text -ForegroundColor Green }
 function Warn([string]$Text) { Write-Host $Text -ForegroundColor Yellow }
 
 function Stop-Updater([int]$Code) {
+    Complete-InGameRequest
     if ($script:Transcript) { try { Stop-Transcript | Out-Null } catch { } ; $script:Transcript = $false }
-    if ($FromProtocol -and -not $NotifyCheck) { try { [void](Read-Host '창을 닫으려면 Enter를 누르세요') } catch { } }
+    if ($FromProtocol -and -not $NotifyCheck -and -not $script:NoPause) {
+        if ($script:AutoClose) { Wait-KeyOrTimeout 15 }
+        else { try { [void](Read-Host '창을 닫으려면 Enter를 누르세요') } catch { } }
+    }
     exit $Code
 }
 function Get-ErrorText($ErrorRecord) {
@@ -223,6 +240,8 @@ function New-HttpClient {
     Add-Type -AssemblyName System.Net.Http
     $handler = New-Object Net.Http.HttpClientHandler
     $handler.AllowAutoRedirect = $true
+    # Several small files are fetched at once (Save-SmallDownloads); .NET Framework allows only 2 connections per host by default.
+    try { if ([Net.ServicePointManager]::DefaultConnectionLimit -lt 8) { [Net.ServicePointManager]::DefaultConnectionLimit = 8 } } catch { }
     $client = New-Object Net.Http.HttpClient($handler)
     $client.Timeout = [TimeSpan]::FromMinutes(10)
     [void]$client.DefaultRequestHeaders.UserAgent.TryParseAdd('TouchlineNoirUpdater/' + $UpdaterVersion)
@@ -252,6 +271,18 @@ function Get-SmallDownload($Client, [string]$Url, [long]$Limit) {
         } finally { $source.Dispose() }
     } finally { $response.Dispose() }
 }
+function Show-LineProgress([string]$Text) {
+    # One console line rewritten in place. PowerShell's progress bar is not used: after it disappears the console restores
+    # the lines beneath it and prints every double-width (Korean) character there twice. ASCII only, so the padding fits.
+    if ($NotifyCheck) { return }
+    try {
+        $plain = -join ($Text.ToCharArray() | Where-Object { [int]$_ -ge 32 -and [int]$_ -lt 127 })
+        $width = [Math]::Max(20, [Console]::WindowWidth - 1)
+        if ($plain.Length -gt $width) { $plain = $plain.Substring(0, $width) }
+        [Console]::Write([char]13 + $plain.PadRight($width) + [char]13)
+    } catch { }
+}
+function Clear-LineProgress { Show-LineProgress '' }
 function Save-VerifiedDownload($Client, $Entry, [string]$Destination, [string]$Label) {
     $uri = Assert-Url $Entry.Url
     $partial = $Destination + '.partial'
@@ -274,7 +305,8 @@ function Save-VerifiedDownload($Client, $Entry, [string]$Destination, [string]$L
                 if (([DateTime]::UtcNow - $shown).TotalMilliseconds -ge 400) {
                     $shown = [DateTime]::UtcNow
                     $percent = [int](100 * $done / [Math]::Max($Entry.Size, 1))
-                    Write-Progress -Activity '내려받는 중' -Status ('{0}  {1} / {2}' -f $Label, (Format-Size $done), (Format-Size $Entry.Size)) -PercentComplete $percent
+                    Show-LineProgress ('  {0}%  {1} / {2}  {3}' -f $percent, (Format-Size $done), (Format-Size $Entry.Size), $Label)
+                    Write-InGameProgress ($script:ProgressBase + $done)
                 }
             }
             [void]$sha.TransformFinalBlock((New-Object byte[] 0), 0, 0)
@@ -283,12 +315,12 @@ function Save-VerifiedDownload($Client, $Entry, [string]$Destination, [string]$L
             if ($done -ne $Entry.Size -or $hash -cne $Entry.Sha256) { throw ('받은 파일의 확인 값이 다릅니다 (' + $Label + ')') }
             Remove-TreeSafely $Destination
             [IO.File]::Move($partial, $Destination)
-            Write-Progress -Activity '내려받는 중' -Completed
+            Clear-LineProgress
             return
         } catch {
             $message = Get-ErrorText $_
             if ($null -ne $target) { $target.Dispose(); $target = $null }
-            Write-Progress -Activity '내려받는 중' -Completed
+            Clear-LineProgress
             try { Remove-TreeSafely $partial } catch { }
             if ($attempt -ge 3) { throw ('내려받기 실패: ' + $Label + ' (' + $message + ')') }
             Warn ('  다시 시도합니다 (' + $attempt + '/3): ' + $message)
@@ -301,15 +333,85 @@ function Save-VerifiedDownload($Client, $Entry, [string]$Destination, [string]$L
         }
     }
 }
+function Read-LimitedContent($Response, [long]$Size) {
+    # The whole body in memory, never more than the expected size (null when it is bigger or the length header differs).
+    $length = $Response.Content.Headers.ContentLength
+    if ($null -ne $length -and $length -ne $Size) { return $null }
+    $source = $Response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+    try {
+        $memory = New-Object IO.MemoryStream
+        $chunk = New-Object byte[] 65536
+        while (($read = $source.Read($chunk, 0, $chunk.Length)) -gt 0) {
+            $memory.Write($chunk, 0, $read)
+            if ($memory.Length -gt $Size) { return $null }
+        }
+        return ,($memory.ToArray())
+    } finally { $source.Dispose() }
+}
+function Save-SmallDownloads($Client, $Steps) {
+    # Files up to 4 MB (installer scripts, documents) are requested six at a time: one after another every GitHub download
+    # (a redirect, then the file) takes about 0.3 s. Each file gets the same size and SHA-256 check; a file that fails here
+    # is fetched once more on its own by Save-VerifiedDownload (three attempts, clear error text).
+    $queue = @($Steps)
+    for ($start = 0; $start -lt $queue.Count; $start += 6) {
+        $pending = @()
+        foreach ($step in $queue[$start..([Math]::Min($start + 5, $queue.Count - 1))]) {
+            $task = $null
+            try { $task = $Client.GetAsync((Assert-Url $step.Entry.Url), [Net.Http.HttpCompletionOption]::ResponseHeadersRead) } catch { $task = $null }
+            $pending += [pscustomobject]@{ Step = $step; Task = $task }
+        }
+        foreach ($item in $pending) {
+            $step = $item.Step
+            $saved = $false
+            $response = $null
+            try {
+                if ($null -ne $item.Task) {
+                    $response = $item.Task.GetAwaiter().GetResult()
+                    if ($response.IsSuccessStatusCode) {
+                        $bytes = Read-LimitedContent $response $step.Entry.Size
+                        if ($null -ne $bytes -and $bytes.Length -eq $step.Entry.Size -and (Get-BytesSha256 $bytes) -ceq $step.Entry.Sha256) {
+                            $partial = $step.Destination + '.partial'
+                            Remove-TreeSafely $partial
+                            [IO.File]::WriteAllBytes($partial, $bytes)
+                            Remove-TreeSafely $step.Destination
+                            [IO.File]::Move($partial, $step.Destination)
+                            $saved = $true
+                        }
+                    }
+                }
+            } catch { $saved = $false } finally { if ($null -ne $response) { $response.Dispose() } }
+            if (-not $saved) { Save-VerifiedDownload $Client $step.Entry $step.Destination $step.Entry.Path }
+            $script:ProgressBase += $step.Entry.Size
+            $script:ProgressFiles++
+            Show-LineProgress ('  files {0} / {1}' -f $script:ProgressFiles, $script:ProgressFileTotal)
+            Write-InGameProgress $script:ProgressBase
+        }
+    }
+    Clear-LineProgress
+}
 function Copy-Verified([string]$Source, $Entry, [string]$Destination) {
     $partial = $Destination + '.partial'
     Remove-TreeSafely $partial
+    # Hashed while copying (one read of the game file); every package file is checked again from disk before the install.
     $in = [IO.File]::Open($Source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $copied = 0L
     try {
         $out = [IO.File]::Open($partial, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-        try { $in.CopyTo($out, 1048576) } finally { $out.Dispose() }
+        try {
+            $chunk = New-Object byte[] 1048576
+            while (($read = $in.Read($chunk, 0, $chunk.Length)) -gt 0) {
+                $out.Write($chunk, 0, $read)
+                [void]$sha.TransformBlock($chunk, 0, $read, $null, 0)
+                $copied += $read
+                if ($copied -gt $Entry.Size) { break }
+            }
+        } finally { $out.Dispose() }
+        [void]$sha.TransformFinalBlock((New-Object byte[] 0), 0, 0)
     } finally { $in.Dispose() }
-    if (-not (Test-FileMatch $partial $Entry.Sha256 $Entry.Size)) {
+    $copiedHash = ([BitConverter]::ToString($sha.Hash)).Replace('-', '').ToLowerInvariant()
+    $sha.Dispose()
+    if ($copied -ne $Entry.Size -or $copiedHash -cne $Entry.Sha256 -or (Get-Item -LiteralPath $partial -Force).Length -ne $Entry.Size) {
         Remove-TreeSafely $partial
         throw ('게임 폴더에서 가져온 파일의 확인 값이 다릅니다: ' + $Entry.Path)
     }
@@ -337,6 +439,142 @@ function Lock-PackageFiles($Steps) {
 function Test-FmRunning {
     $list = [Diagnostics.Process]::GetProcessesByName('fm')
     try { return ($list.Length -gt 0) } finally { foreach ($process in $list) { $process.Dispose() } }
+}
+function Wait-KeyOrTimeout([int]$Seconds) {
+    # After a finished in-game update: closes by itself (any key closes at once).
+    try {
+        for ($left = $Seconds; $left -gt 0; $left--) {
+            [Console]::Write([char]13 + ('창은 ' + $left + '초 뒤 저절로 닫힙니다. 바로 닫으려면 아무 키나 누르세요.').PadRight(60))
+            for ($tick = 0; $tick -lt 10; $tick++) {
+                if ([Console]::KeyAvailable) { [void][Console]::ReadKey($true); [Console]::WriteLine(); return }
+                Start-Sleep -Milliseconds 100
+            }
+        }
+        [Console]::WriteLine()
+    } catch { Start-Sleep -Seconds $Seconds }
+}
+function Wait-FmExit {
+    # Continues at most a quarter of a second after fm.exe ends (waits on the process handle, no fixed pause). An ended
+    # process can stay in the process list while another program still holds a handle to it: waits up to 5 seconds for that.
+    $ended = $null
+    while ($true) {
+        $list = [Diagnostics.Process]::GetProcessesByName('fm')
+        try {
+            if ($list.Length -eq 0) { return }
+            $live = @($list | Where-Object { $exited = $false; try { $exited = $_.HasExited } catch { $exited = $false }; -not $exited })
+            if ($live.Count -gt 0) {
+                $ended = $null
+                try { [void]$live[0].WaitForExit(250) } catch { Start-Sleep -Milliseconds 250 }
+            } else {
+                if ($null -eq $ended) { $ended = [Diagnostics.Stopwatch]::StartNew() }
+                if ($ended.ElapsedMilliseconds -ge 5000) { return }
+                Start-Sleep -Milliseconds 100
+            }
+        } finally { foreach ($process in $list) { $process.Dispose() } }
+    }
+}
+
+# ---- In-game notice link (optional BepInEx plugin TouchlineNoir.UpdateNotice) ----
+function Find-InGameRequest([string[]]$GameFolders) {
+    # The in-game notice's '업데이트하기' button leaves this file next to itself just before it asks Windows to open this tool.
+    foreach ($folder in $GameFolders) {
+        if (-not $folder) { continue }
+        try {
+            $notice = Join-Path $folder 'BepInEx\plugins\TouchlineNoir.UpdateNotice'
+            $file = Join-Path $notice 'update-request.json'
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf) -or (Test-ReparsePoint $notice) -or (Test-ReparsePoint $file)) { continue }
+            if ((Get-Item -LiteralPath $file).Length -gt 4096) { continue }
+            $request = [IO.File]::ReadAllText($file, [Text.Encoding]::UTF8) | ConvertFrom-Json
+            $id = [string](Get-Prop $request 'id')
+            if ([string](Get-Prop $request 'action') -cne 'update' -or $id -cnotmatch '^[0-9a-f]{32}\z') { continue }
+            $at = [DateTime]::Parse([string](Get-Prop $request 'requested_utc'), [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+            $age = ([DateTime]::UtcNow - $at).TotalMinutes
+            if ($age -lt -5 -or $age -gt 30) { continue }
+            return [pscustomobject]@{ Folder = $notice; File = $file; Id = $id; Game = $folder }
+        } catch { continue }
+    }
+    return $null
+}
+function Write-InGameStatus([string]$Stage, [string]$Text, [int]$Percent = -1) {
+    # Progress for the in-game card (the plugin only shows this text). Best effort: never stops the updater.
+    if ($null -eq $script:InGame) { return }
+    try {
+        $status = [ordered]@{ schema = 1; request = $script:InGame.Id; pid = $PID; stage = $Stage; text = $Text; percent = $Percent; updated_utc = [DateTime]::UtcNow.ToString('o') }
+        $path = Join-Path $script:InGame.Folder 'update-status.json'
+        $temporary = $path + '.tmp'
+        [IO.File]::WriteAllText($temporary, ($status | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+                # [NullString]::Value: PowerShell would pass $null to a .NET string parameter as an empty string (no backup file wanted).
+                if (Test-Path -LiteralPath $path -PathType Leaf) { [IO.File]::Replace($temporary, $path, [System.Management.Automation.Language.NullString]::Value) } else { [IO.File]::Move($temporary, $path) }
+                break
+            } catch { if ($attempt -eq 5) { throw }; Start-Sleep -Milliseconds 40 }
+        }
+    } catch { }
+}
+function Write-InGameProgress([long]$Done, [switch]$Force) {
+    if ($null -eq $script:InGame -or $script:ProgressTotal -le 0) { return }
+    # FM closed while files are still coming: this window comes forward now, not only when the download is done.
+    if (-not $script:WindowShown -and -not (Test-FmRunning)) { Show-UpdaterWindow }
+    if (-not $Force -and ([DateTime]::UtcNow - $script:ProgressShown).TotalMilliseconds -lt 500) { return }
+    $script:ProgressShown = [DateTime]::UtcNow
+    $percent = [int][Math]::Min(100, [Math]::Floor(100.0 * $Done / $script:ProgressTotal))
+    Write-InGameStatus 'downloading' ('새 버전 ' + $script:InGameVersion + ' 받는 중: ' + $percent + '% (' + (Format-Size $Done) + ' / ' + (Format-Size $script:ProgressTotal) + ', 파일 ' + $script:ProgressFiles + '/' + $script:ProgressFileTotal + '). FM은 계속 써도 됩니다.') $percent
+}
+function Complete-InGameRequest {
+    # A request is used once: a later click-target run (a notification click, for example) is not taken for an in-game request.
+    if ($null -eq $script:InGame) { return }
+    try {
+        if (Test-Path -LiteralPath $script:InGame.File -PathType Leaf) {
+            $request = [IO.File]::ReadAllText($script:InGame.File, [Text.Encoding]::UTF8) | ConvertFrom-Json
+            if ([string](Get-Prop $request 'id') -ceq $script:InGame.Id) { Remove-Item -LiteralPath $script:InGame.File -Force }
+        }
+    } catch { }
+}
+function Initialize-WindowHelper {
+    # Compiled while FM is still running, so the window can come forward without delay when FM closes.
+    try {
+        if (-not ('TouchlineNoir.UpdaterWindow' -as [type])) {
+            Add-Type -Namespace TouchlineNoir -Name UpdaterWindow -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+[DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+'@
+        }
+    } catch { }
+}
+function Show-UpdaterWindow {
+    # Opened from the in-game notice, this window starts minimized so it does not cover the game. Once FM is gone it comes
+    # forward, so the administrator confirmation (UAC) opens in front instead of as a blinking taskbar button.
+    if ($script:WindowShown) { return }
+    $script:WindowShown = $true
+    try {
+        Initialize-WindowHelper
+        $window = [TouchlineNoir.UpdaterWindow]::GetConsoleWindow()
+        if ($window -eq [IntPtr]::Zero) { return }
+        $owner = [TouchlineNoir.UpdaterWindow]::GetWindow($window, 4)
+        if ($owner -ne [IntPtr]::Zero) { $window = $owner }
+        [void][TouchlineNoir.UpdaterWindow]::ShowWindow($window, 9)
+        [void][TouchlineNoir.UpdaterWindow]::SetForegroundWindow($window)
+    } catch { }
+}
+function Save-VerifiedManifestCopy([byte[]]$Manifest, [byte[]]$Signatures, [string]$Directory) {
+    # A copy of the verified update information for the optional in-game notice (BepInEx plugin). The plugin checks the
+    # signature again itself, so FM never needs internet access of its own. Best effort: a failure never stops the updater.
+    try {
+        $directory = $Directory
+        if (Test-ReparsePoint $directory) { Remove-TreeSafely $directory }
+        Ensure-Directory $directory
+        foreach ($item in @(@('noir-update.json.sigs', $Signatures), @('noir-update.json', $Manifest))) {
+            $target = Join-Path $directory $item[0]
+            $partial = $target + '.partial'
+            Remove-TreeSafely $partial
+            [IO.File]::WriteAllBytes($partial, [byte[]]$item[1])
+            Remove-TreeSafely $target
+            [IO.File]::Move($partial, $target)
+        }
+    } catch { Write-NotifyLog ('업데이트 정보 사본을 저장하지 못함: ' + $_.Exception.Message) }
 }
 function Get-CoreVersion([string]$Text) {
     if ($Text -match '^([0-9]+)\.([0-9]+)\.([0-9]+)') { return [Version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3]) }
@@ -409,22 +647,28 @@ function Sync-NotifyTool {
     if (($current -join ',') -cne ($wanted -join ',')) { Remove-TreeSafely $launcher; [IO.File]::WriteAllBytes($launcher, $wanted) }
     return $tool
 }
+function Register-ProtocolHook {
+    # The click target (notification click, in-game notice button): runs powershell.exe directly (no cmd.exe parsing);
+    # Windows passes no URL text to it (no %1). Only what differs is rewritten.
+    $toolScript = Join-Path (Join-Path $CacheRoot 'tool') 'Update-TouchlineNoir.ps1'
+    $extra = Get-ExtraArguments
+    $protocolKey = 'HKCU:\Software\Classes\' + $ProtocolName
+    $commandKey = $protocolKey + '\shell\open\command'
+    if (-not (Test-Path -LiteralPath $commandKey)) { [void](New-Item -Path $commandKey -Force) }
+    if ([string](Get-Item -LiteralPath $protocolKey).GetValue('') -cne 'URL:Touchline Noir Update') { Set-Item -LiteralPath $protocolKey -Value 'URL:Touchline Noir Update' }
+    [void](New-ItemProperty -LiteralPath $protocolKey -Name 'URL Protocol' -Value '' -PropertyType String -Force)
+    $command = (ConvertTo-ArgumentText $PowerShellExe) + ' ' + (Join-ArgumentText (@('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $toolScript, '-FromProtocol') + $extra))
+    if ([string](Get-Item -LiteralPath $commandKey).GetValue('') -cne $command) { Set-Item -LiteralPath $commandKey -Value $command }
+}
 function Register-NotifyHooks {
     # Writes the notification name, the click target and the scheduled check; only what differs is rewritten.
-    # The click target runs powershell.exe directly (no cmd.exe parsing); Windows passes no URL text to it (no %1).
     $tool = Join-Path $CacheRoot 'tool'
     $toolScript = Join-Path $tool 'Update-TouchlineNoir.ps1'
     $extra = Get-ExtraArguments
     $appKey = 'HKCU:\Software\Classes\AppUserModelId\' + $AppId
     if (-not (Test-Path -LiteralPath $appKey)) { [void](New-Item -Path $appKey -Force) }
     [void](New-ItemProperty -LiteralPath $appKey -Name 'DisplayName' -Value '터치라인 누아르 스킨' -PropertyType String -Force)
-    $protocolKey = 'HKCU:\Software\Classes\' + $ProtocolName
-    $commandKey = $protocolKey + '\shell\open\command'
-    if (-not (Test-Path -LiteralPath $commandKey)) { [void](New-Item -Path $commandKey -Force) }
-    Set-Item -LiteralPath $protocolKey -Value 'URL:Touchline Noir Update'
-    [void](New-ItemProperty -LiteralPath $protocolKey -Name 'URL Protocol' -Value '' -PropertyType String -Force)
-    $command = (ConvertTo-ArgumentText $PowerShellExe) + ' ' + (Join-ArgumentText (@('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $toolScript, '-FromProtocol') + $extra))
-    if ([string](Get-Item -LiteralPath $commandKey).GetValue('') -cne $command) { Set-Item -LiteralPath $commandKey -Value $command }
+    Register-ProtocolHook
     $arguments = '--headless ' + (Join-ArgumentText (@($PowerShellExe, '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $toolScript, '-NotifyCheck') + $extra))
     $conhost = Join-Path $SystemDirectory 'conhost.exe'
     $existing = Get-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction SilentlyContinue
@@ -487,7 +731,7 @@ function Disable-Notify {
     Good '새 버전 알림을 껐습니다. 작업 스케줄러 항목과 알림 등록을 지웠습니다.'
 }
 function Invoke-NotifyOffer([string]$Game, [string]$ThemeName) {
-    if ($Yes -or $CheckOnly -or $PrepareOnly -or $NotifyCheck) { return }
+    if ($Yes -or $CheckOnly -or $PrepareOnly -or $NotifyCheck -or $null -ne $script:InGame) { return }
     try {
         $state = Read-NotifyState
         if ((Get-Prop $state 'enabled') -eq $true) {
@@ -549,6 +793,25 @@ try {
             Start-Transcript -LiteralPath (Join-Path $logs ('update-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss') + '.log')) | Out-Null
             $script:Transcript = $true
         } catch { }
+        # One updater window at a time (the in-game button, a notification click and the .cmd can each open one).
+        $script:SingleInstance = New-Object Threading.Mutex($false, 'Local\TouchlineNoir.SkinUpdater')
+        $owned = $false
+        try { $owned = $script:SingleInstance.WaitOne(0) } catch { $owned = ($_.Exception -is [Threading.AbandonedMutexException]) -or ($_.Exception.InnerException -is [Threading.AbandonedMutexException]) }
+        if (-not $owned) {
+            Warn '스킨 업데이트 도구가 이미 열려 있습니다. 열려 있는 창을 써 주세요.'
+            $script:NoPause = [bool]$FromProtocol
+            Stop-Updater 4
+        }
+        if ($FromProtocol) {
+            $earlyState = Read-JsonState (Join-Path $CacheRoot 'updater-state.json')
+            $script:InGame = Find-InGameRequest @([string](Get-Prop $earlyState 'last_game_path'), [string](Get-Prop $notifyState 'game_path'))
+            if ($null -ne $script:InGame) {
+                # The request's own game folder is the one to update.
+                if (-not $GamePath) { $GamePath = $script:InGame.Game }
+                try { $Host.UI.RawUI.WindowTitle = '터치라인 누아르 스킨 업데이트' } catch { }
+                Write-InGameStatus 'starting' '업데이트 도구가 열렸습니다. 새 버전 정보를 확인하는 중...'
+            }
+        }
     }
     $interactive = -not ($Yes -or $NotifyCheck)
 
@@ -590,6 +853,8 @@ try {
         Save-JsonState $updaterStatePath $updaterState
     }
     Good ('서명 확인 완료 · 공개 최신 버전: ' + $latestDisplay)
+    Write-InGameStatus 'checking' ('공개 최신 버전 ' + $latestDisplay + ' 확인 · 설치된 스킨을 확인하는 중...')
+    Save-VerifiedManifestCopy $manifestBytes $signatureBytes (Join-Path $CacheRoot 'latest')
 
     # The updater replaces only its own script (never the running .cmd launcher), then restarts once.
     $updaterInfo = Get-Prop $manifest 'updater'
@@ -622,6 +887,7 @@ try {
             }
             if ($script:Transcript) { try { Stop-Transcript | Out-Null } catch { } ; $script:Transcript = $false }
             Say '새 업데이트 도구로 다시 시작합니다.'
+            if ($null -ne $script:SingleInstance) { try { $script:SingleInstance.ReleaseMutex() } catch { } }
             exit (Invoke-Child $PowerShellExe $forward)
         }
     }
@@ -639,10 +905,14 @@ try {
     if ((Get-BytesSha256 $finderBytes) -cne $finder.Sha256) { throw '게임 찾기 도구의 확인 값이 다릅니다.' }
     . ([ScriptBlock]::Create((New-Object Text.UTF8Encoding($false)).GetString($finderBytes).TrimStart([char]0xFEFF)))
 
-    if ($NotifyCheck -and -not $GamePath) {
-        $savedGame = [string](Get-Prop $notifyState 'game_path')
-        if ($savedGame -and (Test-Path -LiteralPath (Join-Path $savedGame 'fm.exe') -PathType Leaf)) { $GamePath = $savedGame }
+    if (($NotifyCheck -or $FromProtocol) -and -not $GamePath) {
+        # Opened by the scheduled check, a notification or the in-game notice: start from the game folder seen last time
+        # (searching every library and app folder takes several seconds; the click target passes no arguments).
+        foreach ($savedGame in @([string](Get-Prop $notifyState 'game_path'), [string](Get-Prop $updaterState 'last_game_path'))) {
+            if ($savedGame -and (Test-Path -LiteralPath (Join-Path $savedGame 'fm.exe') -PathType Leaf)) { $GamePath = $savedGame; break }
+        }
     }
+    if ($GamePath) { Say '게임 폴더를 확인하는 중...' } else { Say '게임 폴더를 찾는 중... (드라이브의 게임 라이브러리를 확인합니다)' }
     if ($GamePath) {
         # Same explicit-path check as the installer (Resolve-GameSelection), without scanning every other install location.
         $found = @(Get-Fm27RootCandidates $GamePath.Trim().Trim('"') 'Explicit')
@@ -667,6 +937,17 @@ try {
         }
     }
     Say ('게임 폴더: ' + $game)
+    if ([string](Get-Prop $updaterState 'last_game_path') -cne $game) {
+        Set-StateValue $updaterState 'last_game_path' $game
+        Save-JsonState $updaterStatePath $updaterState
+    }
+    # Security software may hide the user profile from fm.exe: the notice plugin's own folder is always readable by the game.
+    $noticeFolder = Join-Path $game 'BepInEx\plugins\TouchlineNoir.UpdateNotice'
+    if ((Test-Path -LiteralPath $noticeFolder -PathType Container) -and -not (Test-ReparsePoint $noticeFolder)) {
+        Save-VerifiedManifestCopy $manifestBytes $signatureBytes (Join-Path $noticeFolder 'latest')
+        # The notice's '업데이트하기' button opens this updater through the click target (no scheduled task is added).
+        try { [void](Sync-NotifyTool); Register-ProtocolHook } catch { Write-NotifyLog ('업데이트 도구 연결을 등록하지 못함: ' + $_.Exception.Message) }
+    }
 
     # Game build: the same four pinned loader identities the installer checks.
     $identityCache = @{}
@@ -700,6 +981,7 @@ try {
         $supported = (@(Get-Prop $manifest 'builds') | ForEach-Object { 'Steam ' + (Get-Prop $_ 'game_build') }) -join ', '
         Warn ('이 FM27 빌드는 아직 지원하지 않습니다. 지원 빌드: ' + $supported)
         Warn 'FM27이 업데이트되었다면 그 빌드에 맞춘 스킨이 나올 때까지 기다려 주세요. 게임 파일은 바꾸지 않았습니다.'
+        Write-InGameStatus 'error' '이 FM27 빌드는 아직 지원하지 않습니다. 이 빌드용 스킨이 나올 때까지 기다려 주세요. 게임 파일은 바꾸지 않았습니다.'
         Stop-Updater 2
     }
     $buildId = Get-Text $build 'game_build' '^[0-9]+\z'
@@ -831,6 +1113,10 @@ try {
 
     if ($changing.Count -eq 0 -and -not $toolsOnly) {
         Good ('이미 최신입니다: ' + $packageDisplay + ' (스킨 파일 ' + $bundles.Count + '개가 모두 같습니다)')
+        if ($null -ne $script:InGame) {
+            Write-InGameStatus 'latest' ('이미 최신입니다: ' + $packageDisplay + '. 설치할 것이 없습니다.')
+            $script:NoPause = $true
+        }
         Invoke-NotifyOffer $game $chosen
         Stop-Updater 0
     }
@@ -872,20 +1158,41 @@ try {
         Say '확인만 했습니다 (-CheckOnly). 게임 파일은 바꾸지 않았습니다.'
         Stop-Updater 0
     }
-    $answer = Read-Answer '업데이트할까요? (Y/N)'
-    if ($answer -notmatch '^(y|yes|ㅛ|예|네)\z') {
-        Say '취소했습니다. 게임 파일은 바꾸지 않았습니다.'
-        Stop-Updater 3
+    if ($null -ne $script:InGame) {
+        Say '게임 안 알림에서 "업데이트하기"를 눌렀습니다. 묻지 않고 새 버전을 준비합니다 (FM은 계속 써도 됩니다).'
+    } else {
+        $answer = Read-Answer '업데이트할까요? (Y/N)'
+        if ($answer -notmatch '^(y|yes|ㅛ|예|네)\z') {
+            Say '취소했습니다. 게임 파일은 바꾸지 않았습니다.'
+            Stop-Updater 3
+        }
     }
 
+    $script:InGameVersion = $packageDisplay
+    $script:ProgressTotal = $downloadBytes
+    $script:ProgressBase = 0L
+    $script:ProgressFiles = 0
+    $script:ProgressFileTotal = $downloads.Count
+    if ($downloadBytes -gt 0) { Write-InGameStatus 'downloading' ('새 버전 ' + $packageDisplay + ' 받는 중: 0% (0 B / ' + (Format-Size $downloadBytes) + ', 파일 0/' + $downloads.Count + '). FM은 계속 써도 됩니다.') 0 }
+    else { Write-InGameStatus 'downloading' ('새 버전 ' + $packageDisplay + ' 준비 중...') }
+    if ($null -ne $script:InGame) { Initialize-WindowHelper }
+    $small = @()
     foreach ($step in $plan) {
         if ($step.Have) { continue }
         $parent = Split-Path -Parent $step.Destination
         if (Test-ReparsePoint $parent) { Remove-TreeSafely $parent }
         Ensure-Directory $parent
-        if ($step.LocalSource) { Copy-Verified $step.LocalSource $step.Entry $step.Destination }
-        else { Save-VerifiedDownload $client $step.Entry $step.Destination $step.Entry.Path }
+        if ($step.LocalSource) { Copy-Verified $step.LocalSource $step.Entry $step.Destination; Write-InGameProgress $script:ProgressBase }
+        elseif ($step.Entry.Size -le 4MB) { $small += $step }
+        else {
+            Save-VerifiedDownload $client $step.Entry $step.Destination $step.Entry.Path
+            $script:ProgressBase += $step.Entry.Size
+            $script:ProgressFiles++
+            Write-InGameProgress $script:ProgressBase -Force
+        }
     }
+    Save-SmallDownloads $client $small
+    $script:ProgressTotal = 0L
     foreach ($step in $plan) {
         Remove-TreeSafely ($step.Destination + '.partial')
         if (-not (Test-FileMatch $step.Destination $step.Entry.Sha256 $step.Entry.Size)) { throw ('패키지 파일 확인 실패: ' + $step.Entry.Path) }
@@ -897,10 +1204,15 @@ try {
     }
 
     if (Test-FmRunning) {
-        Warn 'FM27이 실행 중입니다. 게임을 완전히 닫으면 자동으로 계속합니다. (그만두려면 Ctrl+C)'
-        while (Test-FmRunning) { Start-Sleep -Seconds 2 }
-        Start-Sleep -Seconds 3
+        if ($null -ne $script:InGame) {
+            Initialize-WindowHelper
+            Write-InGameStatus 'ready' ('준비 완료: ' + $packageDisplay + '. 게임을 저장하고 FM을 종료하면 바로 설치합니다 (관리자 권한 확인 창에서 "예").') 100
+        }
+        Warn 'FM27이 실행 중입니다. FM을 종료하면 바로 설치를 시작합니다. (그만두려면 Ctrl+C)'
+        Wait-FmExit
+        Good 'FM27 종료 확인: 설치를 시작합니다.'
     }
+    if ($null -ne $script:InGame) { Show-UpdaterWindow; Write-InGameStatus 'installing' ('설치 중: ' + $packageDisplay) }
 
     $launch = Join-Path $packageRoot 'Launch.ps1'
     $leases = Lock-PackageFiles $plan
@@ -926,6 +1238,8 @@ try {
     }
     Say ''
     Good ('업데이트 완료: ' + $packageDisplay)
+    Write-InGameStatus 'done' ('업데이트 완료: ' + $packageDisplay)
+    if ($null -ne $script:InGame) { $script:AutoClose = $true }
     Say ('이 버전의 설치 도구 폴더(되돌리기 3-Restore.cmd 포함): ' + $packageRoot)
 
     foreach ($old in @(Get-ChildItem -LiteralPath $packagesRoot -Force)) {
@@ -940,6 +1254,8 @@ try {
 } catch {
     $message = Get-ErrorText $_
     Write-NotifyLog ('오류: ' + $message)
+    Write-InGameStatus 'error' ('업데이트하지 못했습니다: ' + $message)
+    if ($null -ne $script:InGame -and -not (Test-FmRunning)) { Show-UpdaterWindow }
     Write-Host ''
     Write-Host ('오류: ' + $message) -ForegroundColor Red
     Stop-Updater 1
