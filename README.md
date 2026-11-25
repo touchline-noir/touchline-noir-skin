@@ -13,7 +13,9 @@ V6부터는 BepInEx를 쓰는 분을 위한 선택 플러그인 두 가지(여�
 | `TOUCHLINE-NOIR-SKIN-V…-STADIUMS.zip` | 여행 장면 플러그인의 경기장 그림(약 2GB). 플러그인을 쓸 때만 받아 본체 ZIP과 같은 폴더에 풉니다 |
 | `TOUCHLINE-NOIR-UPDATER.zip` | 업데이트 도구. 이미 설치한 스킨을 바뀐 파일만 받아 최신으로 바꿉니다 |
 
-처음 설치: ZIP을 게임 폴더 밖에 압축 해제 → 원하는 테마 폴더의 `1-Check.cmd` → FM 완전 종료 → `2-Install.cmd`.
+처음 설치: 본체 ZIP을 게임 폴더 밖의 일반 폴더(예: `C:\TouchlineNoir`)에 압축 해제 → FM 완전 종료 → 맨 위의
+`0-INSTALL-CLASSIC.cmd` 또는 `0-INSTALL-LIGHT.cmd`(V6.1.0부터 원터치 설치: 스킨, 그리고 BepInEx 6가 있으면 플러그인까지).
+스킨만 설치하려면 원하는 테마 폴더의 `1-Check.cmd` → FM 완전 종료 → `2-Install.cmd`.
 원래 화면으로 되돌리기: `3-Restore.cmd`.
 
 ## BepInEx 플러그인 (선택, V6부터)
@@ -68,7 +70,7 @@ FM27에 BepInEx 6 (IL2CPP)를 이미 쓰는 분만 설치할 수 있습니다. �
 
 ## 지원
 
-- Football Manager 27 · Windows x64 · Steam 빌드 26620374
+- Football Manager 27 · Windows x64 · Steam 빌드 26797085 (FM 27.1.1, V6.1.0부터). 예전 빌드 26620374(27.1.0)용 마지막 판은 V6.0.1입니다.
 - Game Pass · macOS · 다른 게임 빌드는 지원하지 않습니다. FM27이 업데이트되면 그 빌드용 스킨이 나올 때까지
   업데이트 도구는 아무것도 바꾸지 않습니다.
 - 추천 화면 비율 16:9, 정보 표시 크기는 2560×1440 · 1920×1080에서 '보통', 4K에서 '보통' 또는 '작게'.
