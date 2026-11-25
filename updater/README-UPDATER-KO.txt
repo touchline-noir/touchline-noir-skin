@@ -26,7 +26,9 @@ TOUCHLINE NOIR SKIN UPDATER · Football Manager 27 · Windows Steam
 - 게임 본체 · 외부 플러그인 · 사용자 글꼴 · 설정 · 세이브는 바꾸지 않습니다.
 - 업데이트 도구 자체에 새 버전이 있으면 이 스크립트를 먼저 바꾸고 다시 시작합니다.
 - 확인한 업데이트 정보(서명 포함)를 %LOCALAPPDATA%\TouchlineNoir\latest 에 저장합니다. BepInEx를 쓰는 경우 선택 플러그인이
-  이 사본으로 게임 안에 새 버전을 알려 줄 수 있습니다(플러그인이 서명을 다시 확인하고, FM은 인터넷에 접속하지 않습니다).
+  이 사본으로 게임 안에 새 버전을 알려 줄 수 있습니다(플러그인이 서명을 다시 확인합니다). 사본이 없거나 26시간보다
+  오래됐으면 플러그인이 FM 안에서 같은 서명된 업데이트 정보를 GitHub에서 직접 받습니다. 끄려면
+  BepInEx\config\touchline-noir.update-notice.cfg 의 OnlineCheck 를 false 로 바꿉니다.
 
 새 버전 알림 (선택)
 - 업데이트를 마쳤거나 "이미 최신"일 때 한 번 물어봅니다. 켜 두면 로그인할 때와 3시간마다 업데이트 정보만
